@@ -2,7 +2,9 @@
 #
 # To get started with Next.js see: https://nextjs.org/docs/getting-started
 #
-name: Deploy Next.js site to Pages
+# Deprecated workflow – replaced by deploy.yml for Docker builds
+# This file is kept only for historical reference and can be removed.
+
 
 on:
   # Runs on pushes targeting the default branch
