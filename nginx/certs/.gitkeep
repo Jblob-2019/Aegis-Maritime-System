@@ -1,0 +1,2 @@
+# Keep the mounted certs directory in the repo so Docker can map it
+# (actual cert files are added on the server, not committed).
