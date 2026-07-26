@@ -377,6 +377,7 @@ export default function LeafletMap({
   const [boundaryCount, setBoundaryCount] = useState(0)
   const lastPositionByBoatRef = useRef<Map<string, { lat: number; lng: number; time: number }>>(new Map())
   const headingByBoatRef = useRef<Map<string, number>>(new Map())
+  const markerStateRef = useRef<Map<string, { zone: ZoneWithUnknown; selected: boolean; heading: number }>>(new Map())
   const demoIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const demoIndexRef = useRef(0)
   const followVesselRef = useRef(true)
@@ -400,19 +401,11 @@ export default function LeafletMap({
     const ringColor = zone === "DANGER" ? "#ff4a4a" : zone === "WARNING" ? "#fde047" : zone === "SAFE" ? "#5effa8" : "#38bdf8"
     return L.divIcon({
       className: `vessel-marker ${selected ? "selected" : ""}`,
-      html: `
-        <div class="boat-marker-wrapper ${selected ? "selected" : ""}" style="transform: rotate(${headingDeg}deg); --ring-color: ${ringColor};">
-          <div class="boat-marker-radar">
-            <span class="boat-radar-ring"></span>
-            <span class="boat-radar-ring boat-radar-ring--delay"></span>
-          </div>
-          <img src="/icons/boat-1.png" class="boat-marker-icon" alt="Boat marker" />
-        </div>
-      `,
-      iconSize: [48, 48],
-      iconAnchor: [24, 36],
-      tooltipAnchor: [0, -18],
-      popupAnchor: [0, -20],
+      html: `<div style="width: 60px; height: 60px; display: flex; align-items: center; justify-content: center; position: relative; transform: rotate(${headingDeg}deg);"><div class="pulse-ring" style="--pulse-color: ${ringColor};"></div><img src="/icons/boat-1.png" style="width: 32px; height: 32px; position: relative; z-index: 10; filter: drop-shadow(0 0 8px ${ringColor}); transform: rotate(${-headingDeg}deg);"/></div>`,
+      iconSize: [60, 60],
+      iconAnchor: [30, 30],
+      tooltipAnchor: [0, -35],
+      popupAnchor: [0, -35],
     })
   }
 
@@ -473,14 +466,29 @@ export default function LeafletMap({
     zone === "DANGER" ? "#ff4a4a" : zone === "WARNING" ? "#fde047" : zone === "SAFE" ? "#5effa8" : "#38bdf8"
 
   const updateMarkerAppearance = (marker: any, boat: BoatMarkerData, selected: boolean) => {
-    const element = marker.getElement() as HTMLElement | null
-    if (!element) return
-
-    const wrapper = element.querySelector(".boat-marker-wrapper") as HTMLElement | null
-    if (!wrapper) return
-
-    wrapper.classList.toggle("selected", selected)
-    wrapper.style.setProperty("--ring-color", getZoneColor(boat.zone))
+    const heading = headingByBoatRef.current.get(boat.boatId) ?? 0
+    const cached = markerStateRef.current.get(boat.boatId)
+    
+    // Only recreate icon if zone or selection changed (NOT on heading change)
+    if (!cached || cached.zone !== boat.zone || cached.selected !== selected) {
+      marker.setIcon(vesselIcon(boat.zone, selected, heading))
+      markerStateRef.current.set(boat.boatId, { zone: boat.zone, selected, heading })
+    } else if (cached.heading !== heading) {
+      // Just update heading rotation without recreating icon
+      const element = marker.getElement() as HTMLElement | null
+      if (element) {
+        const innerDiv = element.firstChild as HTMLElement | null
+        if (innerDiv) {
+          innerDiv.style.transform = `rotate(${heading}deg)`
+          // Also update boat image rotation to keep it pointing down
+          const boatImg = innerDiv.querySelector('img') as HTMLElement | null
+          if (boatImg) {
+            boatImg.style.transform = `rotate(${-heading}deg)`
+          }
+        }
+      }
+      markerStateRef.current.set(boat.boatId, { zone: boat.zone, selected, heading })
+    }
   }
 
   const emitBoats = () => {
@@ -861,7 +869,6 @@ export default function LeafletMap({
       lon: 79.1,
       zone: "SAFE",
     }
-    upsertBoat(initialBoat, { shouldPan: false })
 
     // Path trail polyline
     const pathPolyline = L.polyline([], {
@@ -875,6 +882,9 @@ export default function LeafletMap({
     pathPolylineRef.current = pathPolyline
 
     mapInstanceRef.current = map
+
+    // Now upsert the initial boat after map is ready
+    upsertBoat(initialBoat, { shouldPan: false })
 
     // Leaflet needs invalidateSize after flex layout settles.
     // Stop auto-following when user manually pans or zooms.
@@ -904,10 +914,30 @@ export default function LeafletMap({
     const style = document.createElement("style")
     style.textContent = `
       @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500;700&display=swap');
-      @keyframes radarPulse {
-        0% { transform: scale(0.8); opacity: 0.45; }
-        70% { transform: scale(2.3); opacity: 0; }
-        100% { opacity: 0; }
+      @keyframes smoothPulse {
+        0% { 
+          border-width: 2px; 
+          opacity: 0.8; 
+          transform: scale(1);
+        }
+        50% { 
+          border-width: 2px; 
+          opacity: 0.4; 
+          transform: scale(1.15);
+        }
+        100% { 
+          border-width: 2px; 
+          opacity: 0.8; 
+          transform: scale(1);
+        }
+      }
+      .pulse-ring {
+        position: absolute;
+        width: 48px;
+        height: 48px;
+        border: 2px solid var(--pulse-color);
+        border-radius: 50%;
+        animation: smoothPulse 2s ease-in-out infinite;
       }
       .leaflet-container {
         background: radial-gradient(circle at top, rgba(12, 34, 58, 0.96), rgba(3, 9, 19, 1));
@@ -929,6 +959,74 @@ export default function LeafletMap({
         border: 1px solid rgba(56, 189, 248, 0.16) !important;
         backdrop-filter: blur(12px);
       }
+        /* Add these inside your style.textContent template literal */
+
+      .vessel-core {
+        width: 14px;
+        height: 14px;
+        border-radius: 50% 50% 0 50%;
+        border: 2px solid #ffffff;
+        transform: rotate(45deg);
+        box-shadow: 0 0 12px var(--ring-color);
+        position: relative;
+        z-index: 2;
+      }
+
+      .boat-marker-wrapper {
+        position: relative;
+        width: 48px;
+        height: 48px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+      }
+
+      .boat-marker-wrapper.selected .boat-marker-icon {
+        filter: drop-shadow(0 0 16px rgba(56, 189, 248, 0.85));
+      }
+
+      .boat-marker-radar {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+      }
+
+      .boat-radar-ring {
+        position: absolute;
+        width: 42px;
+        height: 42px;
+        border: 2px solid var(--ring-color);
+        border-radius: 9999px;
+        opacity: 0.55;
+        animation: radarPulse 1.8s ease-out infinite;
+        box-sizing: border-box;
+      }
+
+      .boat-radar-ring--delay {
+        animation-delay: 0.6s;
+      }
+
+      .boat-marker-icon {
+        width: 20px;
+        height: 20px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 3;
+      }
+
+      .vessel-marker {
+        width: 48px !important;
+        height: 48px !important;
+        display: flex !important;
+        align-items: center;
+        justify-content: center;
+      }
+
       .leaflet-control-attribution a {
         color: #67e8f9 !important;
       }
@@ -981,78 +1079,6 @@ export default function LeafletMap({
         font-size: 12px !important;
         box-shadow: 0 8px 30px rgba(0,0,0,0.35) !important;
       }
-      .boat-marker-wrapper {
-        position: relative;
-        width: 48px;
-        height: 48px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-      }
-      .boat-marker-wrapper.selected .boat-marker-icon {
-        filter: drop-shadow(0 0 16px rgba(56, 189, 248, 0.85));
-      }
-      .boat-marker-radar {
-        position: absolute;
-        inset: 0;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        pointer-events: none;
-      }
-      .boat-radar-ring {
-        position: absolute;
-        width: 42px;
-        height: 42px;
-        border: 2px solid var(--ring-color);
-        border-radius: 9999px;
-        opacity: 0.55;
-        animation: radarPulse 1.8s ease-out infinite;
-      }
-      .boat-radar-ring--delay {
-        animation-delay: 0.6s;
-      }
-      .boat-marker-icon {
-        width: 44px;
-        height: 44px;
-        display: block;
-        transform-origin: center center;
-        position: relative;
-        z-index: 1;
-      }
-      .vessel-marker {
-        width: 46px !important;
-        height: 46px !important;
-        display: flex !important;
-        align-items: center;
-        justify-content: center;
-      }
-      .vessel-radar {
-        position: relative;
-        width: 26px;
-        height: 26px;
-      }
-      .vessel-radar .radar-ring {
-        position: absolute;
-        inset: 0;
-        border-radius: 50%;
-        box-shadow: 0 0 12px rgba(96, 165, 250, 0.45);
-        animation: radarPulse 1.8s ease-out infinite;
-      }
-      .vessel-radar .radar-ring--delay {
-        animation-delay: 0.6s;
-      }
-      .vessel-radar .vessel-core {
-        position: absolute;
-        inset: 7px;
-        border-radius: 50%;
-        z-index: 2;
-        width: 12px;
-        height: 12px;
-      }
-      .vessel-marker.selected .vessel-core {
-        box-shadow: 0 0 24px rgba(255, 255, 255, 0.45), inset 0 0 16px rgba(255, 255, 255, 0.75);
-      }
       .hud-status-pill {
         min-width: 5px;
         min-height: 5px;
@@ -1083,6 +1109,7 @@ export default function LeafletMap({
         mapInstanceRef.current.remove()
         mapInstanceRef.current = null
       }
+      markerStateRef.current.clear()
     }
   }, [onLocationUpdate, onProximityUpdate, onSpeedUpdate, onEEZUpdate, onZoneUpdate, onBoatSelect, onBoatsUpdate])
 
@@ -1121,15 +1148,30 @@ export default function LeafletMap({
       .then((rows: Array<{ boatId?: string; lat?: number; lon?: number; zone?: string; distance?: number; timestamp?: string }>) => {
         if (!Array.isArray(rows) || rows.length === 0) return
         for (const row of rows) {
-          if (row.lat === undefined || row.lon === undefined) continue
+          const lat = Number(row.lat)
+          const lon = Number(row.lon)
+          
+          // Validate coordinates
+          if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+            console.warn("Invalid coordinates from REST API", { lat, lon, boatId: row.boatId })
+            continue
+          }
+          
+          // Validate lat/lon ranges
+          if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+            console.warn("Coordinates out of valid range from REST API", { lat, lon, boatId: row.boatId })
+            continue
+          }
+          
           const boat: BoatMarkerData = {
             boatId: row.boatId || "BOAT1",
-            lat: Number(row.lat),
-            lon: Number(row.lon),
+            lat,
+            lon,
             zone: normalizeZone(row.zone),
             distance: row.distance,
             timestamp: row.timestamp,
           }
+          console.log("Initial boat loaded:", boat)
           upsertBoat(boat, { shouldPan: false })
         }
         setIsTracking(true)
@@ -1154,6 +1196,19 @@ export default function LeafletMap({
       if (demoMode) return
       const lat = Number(data.lat)
       const lng = Number(data.lon)
+      
+      // Validate coordinates
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        console.warn("Invalid coordinates from ESP32", { lat, lng, rawData: data })
+        return
+      }
+      
+      // Validate lat/lon ranges
+      if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+        console.warn("Coordinates out of valid range", { lat, lng })
+        return
+      }
+      
       const boat: BoatMarkerData = {
         boatId: data.boatId || "BOAT1",
         lat,
@@ -1162,6 +1217,7 @@ export default function LeafletMap({
         distance: data.distance,
         timestamp: data.timestamp,
       }
+      console.log("Location update received:", boat)
       upsertBoat(boat, {
         shouldPan: true,
         directSpeed: typeof data.speed === "number" ? Number(data.speed) : undefined,
