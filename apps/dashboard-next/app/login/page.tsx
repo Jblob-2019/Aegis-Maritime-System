@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation'; // Next.js specific router
 import axios from 'axios';
+import { getRuntimeEnv } from '@/lib/env';
 
 export default function LoginPage() {
   const [username, setUsername] = useState('');
@@ -24,8 +25,8 @@ export default function LoginPage() {
 
     // --- PRODUCTION AXIOS LOGIC ---
     try {
-      const { NEXT_PUBLIC_BACKEND_URL } = require('@/lib/env').getRuntimeEnv()
-      const response = await axios.post(`${NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'}/api/auth/login`, {
+      const { NEXT_PUBLIC_BACKEND_URL } = getRuntimeEnv();
+      const response = await axios.post(`${NEXT_PUBLIC_BACKEND_URL || 'http://localhost:4000'}/api/auth/login`, {
         username: username,
         password: password
       });

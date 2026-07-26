@@ -105,7 +105,7 @@ export default function LogsPage() {
   const [error,       setError]       = useState<string | null>(null)
 
   const fetchData = useCallback(async () => {
-    const BACKEND = getRuntimeEnv().NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000"
+    const BACKEND = getRuntimeEnv().NEXT_PUBLIC_BACKEND_URL || "http://localhost:4000"
     const qs      = boatFilter.trim() ? `?boatId=${encodeURIComponent(boatFilter.trim())}` : ""
 
     setLoading(true)

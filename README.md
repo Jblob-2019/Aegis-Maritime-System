@@ -70,7 +70,7 @@ That command starts:
 
 ### 2️⃣ Deploy on every push to `main`
 The workflow `.github/workflows/deploy.yml` watches for changes under `apps/backend-api/**`
-or `aegis-frontend/**`. When a push happens it:
+or `apps/dashboard-next/**` (plus the workflow file itself). When a push happens it:
 - builds a new Docker image for the backend and pushes it to `ghcr.io/<owner>/aegis-backend:latest`
 - builds a new Docker image for the Next.js frontend and pushes it to `ghcr.io/<owner>/aegis-frontend:latest`
 - Watchtower, already running on the server, sees the new digests, pulls the images and
@@ -97,10 +97,6 @@ once the Docker deployment is live.
 ## FAQ
 - *Do I need to rebuild images locally?* No. The CI workflow builds and pushes them.
 - *Can I keep the images private?* Yes – just make sure the server runs `docker login ghcr.io` once with a PAT that has the `read:packages` scope.
-- *What if I want to use the Vite dashboard instead?* Replace `aegis-frontend` with the Vite folder in the Dockerfile and `docker-compose.yml`. The same workflow works.
+- *What if I want a different dashboard?* Update `docker-compose.yml` to point at your alternate Next.js project. The same workflow still works.
 
 Enjoy a zero‑touch, production‑ready deployment!
-
-## ⚠️ Deprecated duplicate folder
-
-The `aegis-frontend/` directory is a leftover duplicate of the Next.js dashboard that now lives in `apps/dashboard-next/`. It is no longer used for builds or deployment and can be safely removed.

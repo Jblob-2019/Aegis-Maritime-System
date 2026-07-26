@@ -189,7 +189,7 @@ export default function MaritimeDashboard() {
   }, [zone])
 
   useEffect(() => {
-    const BACKEND_URL = getRuntimeEnv().NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000"
+    const BACKEND_URL = getRuntimeEnv().NEXT_PUBLIC_BACKEND_URL || "http://localhost:4000"
     const load = async () => {
       try {
         const [alertRes, locRes, latestRes] = await Promise.all([
