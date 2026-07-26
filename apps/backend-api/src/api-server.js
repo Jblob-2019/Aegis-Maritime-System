@@ -7,8 +7,6 @@ import express from 'express'
 import cors from 'cors'
 import mongoose from 'mongoose'
 import http from 'node:http'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { Server } from 'socket.io'
 
 // ---------------------------------------------------------------------------
@@ -156,6 +154,114 @@ app.get('/health', (_req, res) => {
 })
 
 // ---------------------------------------------------------------------------
+// 2c. Auth login (token-based)
+// ---------------------------------------------------------------------------
+
+/**
+ * Demo-grade login endpoint. The hackathon route (the front-end still
+ * supports the admin/admin123 shortcut) goes through here as well so the
+ * back-end is the single source of truth for credentials.
+ *
+ * In production replace this with hashed-password verification against a
+ * User model + a signed JWT. For now, credentials are read from env so
+ * operators can rotate them without redeploying.
+ *
+ * @param {Request}  req
+ * @param {Response} res
+ */
+app.post('/api/auth/login', (req, res) => {
+  const { username, password } = req.body || {}
+  const adminUser = process.env.ADMIN_USER || 'admin'
+  const adminPass = process.env.ADMIN_PASSWORD || 'admin123'
+
+  if (!username || !password) {
+    return res.status(400).json({ message: 'username and password are required' })
+  }
+
+  if (username !== adminUser || password !== adminPass) {
+    return res.status(401).json({ message: 'Invalid credentials. Access Denied.' })
+  }
+
+  // Token: short opaque string. In production this would be a JWT signed
+  // with JWT_SECRET. We pass back a base64 timestamp so the existing
+  // front-end (which only stores it in localStorage) keeps working.
+  const token = Buffer.from(`${username}:${Date.now()}`).toString('base64')
+  res.json({
+    role: 'admin',
+    token,
+    boatId: null,
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 2d. Input validation helpers
+// ---------------------------------------------------------------------------
+
+const ALLOWED_ZONES = ['SAFE', 'WARNING', 'DANGER', 'ALERT', 'CLEAR', 'UNKNOWN']
+
+/**
+ * Coerce a value into a finite number, or return NaN.
+ * @param {unknown} v
+ * @returns {number}
+ */
+function toFiniteNumber(v) {
+  const n = typeof v === 'number' ? v : parseFloat(v)
+  return Number.isFinite(n) ? n : NaN
+}
+
+/**
+ * Validate a `POST /api/location` payload. Returns either the cleaned data
+ * (with parsed floats) or a string describing the first failure.
+ * @param {unknown} body
+ * @returns {{ ok: true, data: LocationPayload } | { ok: false, error: string }}
+ */
+function validateLocationPayload(body) {
+  if (!body || typeof body !== 'object') {
+    return { ok: false, error: 'Body must be a JSON object' }
+  }
+  const { boatId, lat, lon, distance, zone } = body
+
+  if (typeof boatId !== 'string' || boatId.trim() === '' || boatId.length > 64) {
+    return { ok: false, error: 'boatId must be a non-empty string (max 64 chars)' }
+  }
+
+  const latN = toFiniteNumber(lat)
+  const lonN = toFiniteNumber(lon)
+  if (!Number.isFinite(latN) || latN < -90 || latN > 90) {
+    return { ok: false, error: 'lat must be a finite number between -90 and 90' }
+  }
+  if (!Number.isFinite(lonN) || lonN < -180 || lonN > 180) {
+    return { ok: false, error: 'lon must be a finite number between -180 and 180' }
+  }
+
+  let distanceN = null
+  if (distance !== undefined && distance !== null) {
+    distanceN = toFiniteNumber(distance)
+    if (!Number.isFinite(distanceN) || distanceN < 0 || distanceN > 10000) {
+      return { ok: false, error: 'distance must be a non-negative finite number' }
+    }
+  }
+
+  if (zone !== undefined && zone !== null && !ALLOWED_ZONES.includes(zone)) {
+    return {
+      ok: false,
+      error: `zone must be one of: ${ALLOWED_ZONES.join(', ')}`,
+    }
+  }
+
+  return {
+    ok: true,
+    data: {
+      boatId: boatId.trim(),
+      lat: latN,
+      lon: lonN,
+      distance: distanceN,
+      zone: zone ?? undefined,
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 3. ESP32 posts raw location data here
 // ---------------------------------------------------------------------------
 
@@ -164,46 +270,45 @@ app.get('/health', (_req, res) => {
  * @param {Response} res
  */
 app.post('/api/location', async (req, res) => {
-  const { boatId, lat, lon, distance, zone } = /** @type {LocationPayload} */ (req.body)
-  const resolvedBoatId = boatId || 'BOAT1'
+  const validation = validateLocationPayload(req.body)
+  if (!validation.ok) {
+    return res.status(400).json({ error: validation.error })
+  }
+  const { boatId, lat, lon, distance, zone } = validation.data
 
-  if (lat !== undefined && lon !== undefined) {
-    try {
-      const newData = new Boat({
-        boatId:   resolvedBoatId,
-        lat:      parseFloat(/** @type {any} */ (lat)),
-        lon:      parseFloat(/** @type {any} */ (lon)),
-        distance: parseFloat(/** @type {any} */ (distance)),
-        zone:     zone,
+  try {
+    const newData = new Boat({
+      boatId,
+      lat,
+      lon,
+      distance,
+      zone,
+    })
+
+    await newData.save()
+
+    // Real-time push to all connected dashboards
+    io.emit('locationUpdate', newData)
+
+    // Persist zone-change events on a per-boat basis.
+    const prevZone = lastZoneByBoat.get(boatId) ?? null
+    if (zone && zone !== prevZone) {
+      lastZoneByBoat.set(boatId, zone)
+      const alert = new AlertEvent({
+        boatId,
+        zone,
+        lat,
+        lon,
       })
-
-      await newData.save()
-
-      // Real-time push to all connected dashboards
-      io.emit('locationUpdate', newData)
-
-      // Persist zone-change events on a per-boat basis.
-      const prevZone = lastZoneByBoat.get(resolvedBoatId) ?? null
-      if (zone && zone !== prevZone) {
-        lastZoneByBoat.set(resolvedBoatId, zone)
-        const alert = new AlertEvent({
-          boatId: resolvedBoatId,
-          zone,
-          lat: parseFloat(/** @type {any} */ (lat)),
-          lon: parseFloat(/** @type {any} */ (lon)),
-        })
-        await alert.save()
-        io.emit('alertEvent', alert)
-      }
-
-      console.log(`[SAVED TO DB] Lat: ${lat}, Lon: ${lon}, Zone: ${zone}`)
-      res.status(201).json({ message: 'Data saved!', data: newData })
-    } catch (err) {
-      console.error('❌ DB Save Error:', err)
-      res.status(500).json({ error: 'Failed to save to database' })
+      await alert.save()
+      io.emit('alertEvent', alert)
     }
-  } else {
-    res.status(400).json({ error: 'Invalid data — lat and lon required' })
+
+    console.log(`[SAVED TO DB] BoatId: ${boatId}, Lat: ${lat}, Lon: ${lon}, Zone: ${zone}`)
+    res.status(201).json({ message: 'Data saved!', data: newData })
+  } catch (err) {
+    console.error('❌ DB Save Error:', err)
+    res.status(500).json({ error: 'Failed to save to database' })
   }
 })
 
@@ -314,7 +419,3 @@ app.get('/api/alerts', async (req, res) => {
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on http://0.0.0.0:${PORT}`)
 })
-
-// Re-export the project root for debugging in dev tools (optional)
-export const __filename = fileURLToPath(import.meta.url)
-export const __dirname = path.dirname(__filename)
