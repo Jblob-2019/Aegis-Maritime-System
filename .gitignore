@@ -8,3 +8,4 @@ apps/**/.next/
 apps/backend-api/boat_data.db
 *.log
 .vercel
+aegis-frontend/

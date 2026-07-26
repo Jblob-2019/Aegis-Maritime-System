@@ -5,6 +5,7 @@ import L from "leaflet"
 import "leaflet/dist/leaflet.css"
 import { io, Socket } from "socket.io-client"
 import * as turf from "@turf/turf"
+import { getRuntimeEnv } from "@/lib/env"
 
 interface LeafletMapProps {
   onLocationUpdate: (lat: number, lng: number) => void
@@ -1135,7 +1136,7 @@ export default function LeafletMap({
   useEffect(() => {
     if (!mapInstanceRef.current) return
 
-    const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000"
+    const BACKEND_URL = getRuntimeEnv().NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000"
 
     // Initial REST fetch — load latest snapshot for all boats
     fetch(`${BACKEND_URL}/api/location/latest`)
