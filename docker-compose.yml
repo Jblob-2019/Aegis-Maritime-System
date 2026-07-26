@@ -1,4 +1,4 @@
-env_file: .env
+services:
   mongo:
     image: mongo:7
     restart: unless-stopped
@@ -19,6 +19,7 @@ env_file: .env
     depends_on:
       mongo:
         condition: service_healthy
+    env_file: .env
     environment:
       MONGO_URI: mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongo:27017
       PORT: 4000
@@ -33,9 +34,11 @@ env_file: .env
     restart: unless-stopped
     depends_on:
       - backend
+    env_file: .env
     environment:
       NEXT_PUBLIC_API_URL: http://backend:4000
       NEXT_PUBLIC_SOCKET_URL: ${PUBLIC_SOCKET_URL}
+      BACKEND_PORT: 4000
     ports:
       - "3000:3000"
     labels:

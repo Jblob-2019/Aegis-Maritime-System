@@ -1136,7 +1136,7 @@ export default function LeafletMap({
   useEffect(() => {
     if (!mapInstanceRef.current) return
 
-    const BACKEND_URL = getRuntimeEnv().NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000"
+    const BACKEND_URL = getRuntimeEnv().NEXT_PUBLIC_BACKEND_URL || "http://localhost:4000"
 
     // Initial REST fetch — load latest snapshot for all boats
     fetch(`${BACKEND_URL}/api/location/latest`)

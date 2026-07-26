@@ -36,8 +36,9 @@ fi
 
 echo "✅  Detected host IP: $HOST_IP"
 
-# Default backend port (can be overridden by env)
-BACKEND_PORT="${BACKEND_PORT:-5000}"
+# Default backend port (override via env, e.g. set in docker-compose.yml).
+# The compose file publishes the backend on 4000, so 4000 is the right default.
+BACKEND_PORT="${BACKEND_PORT:-4000}"
 BACKEND_URL="http://${HOST_IP}:${BACKEND_PORT}"
 
 # Write the runtime env file Next.js will serve as /env.js
