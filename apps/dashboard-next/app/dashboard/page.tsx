@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect, useRef } from "react"
 import dynamic from "next/dynamic"
 import { TelemetryPanel } from "./TelemetryPanel"
+import { getRuntimeEnv } from "@/lib/env"
 
 type AlertEntry = { zone: string; lat: number; lon: number; timestamp: string }
 type ZoneStatus = "DANGER" | "WARNING" | "ALERT" | "CLEAR" | "UNKNOWN"
@@ -188,7 +189,7 @@ export default function MaritimeDashboard() {
   }, [zone])
 
   useEffect(() => {
-    const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000"
+    const BACKEND_URL = getRuntimeEnv().NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000"
     const load = async () => {
       try {
         const [alertRes, locRes, latestRes] = await Promise.all([

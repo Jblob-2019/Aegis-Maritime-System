@@ -13,5 +13,13 @@ export default function RootPage() {
     router.push('/login')
   }, [router])
 
-  return null
+  return (
+    <>
+      <noscript>
+        <div style={{ padding: '1rem', fontFamily: 'sans-serif' }}>
+          JavaScript is disabled. Please <a href="/login">log in</a> to continue.
+        </div>
+      </noscript>
+    </>
+  )
 }

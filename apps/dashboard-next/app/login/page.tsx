@@ -24,7 +24,8 @@ export default function LoginPage() {
 
     // --- PRODUCTION AXIOS LOGIC ---
     try {
-      const response = await axios.post('https://your-backend-url.onrender.com/api/auth/login', {
+      const { NEXT_PUBLIC_BACKEND_URL } = require('@/lib/env').getRuntimeEnv()
+      const response = await axios.post(`${NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'}/api/auth/login`, {
         username: username,
         password: password
       });

@@ -31,6 +31,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
+      <head>
+        {/* Runtime env injected by the container's startup script */}
+        <script src="/env.js" defer />
+      </head>
       <body className="font-sans antialiased">
         <TopNav />
         {children}

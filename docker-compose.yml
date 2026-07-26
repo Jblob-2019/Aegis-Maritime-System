@@ -1,4 +1,4 @@
-services:
+env_file: .env
   mongo:
     image: mongo:7
     restart: unless-stopped
