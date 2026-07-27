@@ -11,7 +11,7 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const router = useRouter(); // Initialize Next.js router
 
-  const handleLogin = async (e) => {
+  const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError('');
 
