@@ -5,6 +5,7 @@ import L from "leaflet"
 import "leaflet/dist/leaflet.css"
 import { io, Socket } from "socket.io-client"
 import * as turf from "@turf/turf"
+import type { Feature, LineString, MultiLineString } from "geojson"
 import { getRuntimeEnv } from "@/lib/env"
 
 interface LeafletMapProps {
@@ -33,7 +34,7 @@ type BoatMarkerData = {
   timestamp?: string
 }
 
-type TurfLineFeature = turf.feature<turf.LineString | turf.MultiLineString>
+type TurfLineFeature = Feature<LineString | MultiLineString>
 
 // ─── Tamil Nadu Coastline + Distance Zones ─────────────────────────────────
 // Coordinates are [lat, lng]
