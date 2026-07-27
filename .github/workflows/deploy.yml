@@ -33,7 +33,7 @@ jobs:
               kill -9 "$pid" 2>/dev/null || true
               sleep 1
             fi
-            # 2) Fallback: lsof (handles processes bound via different namespaces)
+            # 2) Fallback: lsof
             if command -v lsof >/dev/null 2>&1; then
               pid=$(lsof -ti tcp:$port 2>/dev/null | head -n1)
               if [ -n "$pid" ]; then
@@ -42,9 +42,7 @@ jobs:
                 sleep 1
               fi
             fi
-            # 3) Last resort: kill any stray node process left over from a
-            #    previous `node src/api-server.js` (this is exactly the case
-            #    that bit us when a host node process held port 4000).
+            # 3) Last resort: kill stray node api-server.js
             if pgrep -af "node src/api-server.js" >/dev/null; then
               echo "Found stray node api-server.js process — killing"
               pkill -9 -f "node src/api-server.js" || true
@@ -81,8 +79,35 @@ jobs:
           docker compose stop backend frontend || true
           docker compose rm -f  backend frontend || true
 
-      # 5️⃣ Bring the entire stack up.
+      # 5️⃣ Pre-pull external base images (nginx, watchtower) with retry.
+      #    This avoids the "connection reset by peer" errors from Docker Hub
+      #    by giving the pull multiple attempts before docker compose runs.
+      - name: Pre-pull nginx and watchtower with retry
+        run: |
+          for img in nginx:alpine containrrr/watchtower; do
+            for attempt in {1..4}; do
+              echo "Pulling $img (attempt $attempt/4)…"
+              if docker pull "$img"; then
+                echo "✅  $img pulled"
+                break
+              fi
+              echo "❌  Pull failed, retrying in 10s…"
+              sleep 10
+            done
+          done
+
+      # 6️⃣ Bring the entire stack up (with retry on transient errors).
       - name: Start up the full stack
         run: |
           cd ${{ github.workspace }}
-          docker compose up -d backend frontend nginx watchtower
+          for attempt in {1..3}; do
+            echo "docker compose up attempt $attempt/3…"
+            if docker compose up -d backend frontend nginx watchtower; then
+              echo "✅  Stack is up"
+              exit 0
+            fi
+            echo "❌  Compose up failed, retrying in 10s…"
+            sleep 10
+          done
+          echo "❌  Stack failed to come up after 3 attempts"
+          exit 1
