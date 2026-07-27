@@ -34,13 +34,16 @@ jobs:
             -t ghcr.io/${{ github.repository_owner }}/aegis-frontend:latest \
             ./apps/dashboard-next
 
-      # 4️⃣ Stop the currently-running backend & frontend containers
-      #    (.env, nginx/certs/ remain untouched on the host)
+      # 4️⃣ Stop the currently-running backend & frontend containers.
+      #    cd into the deployment directory first so docker compose finds
+      #    docker-compose.yml and the real .env on the host.
       - name: Stop the currently-running backend & frontend
-        working-directory: /home/jana/Aegis-Maritime-System
-        run: docker compose stop backend frontend
+        run: |
+          cd /home/jana/Aegis-Maritime-System
+          docker compose stop backend frontend
 
       # 5️⃣ Recreate the containers from the new images – old ones are deleted.
       - name: Recreate backend & frontend with the freshly-built images
-        working-directory: /home/jana/Aegis-Maritime-System
-        run: docker compose up -d --force-recreate backend frontend
+        run: |
+          cd /home/jana/Aegis-Maritime-System
+          docker compose up -d --force-recreate backend frontend
