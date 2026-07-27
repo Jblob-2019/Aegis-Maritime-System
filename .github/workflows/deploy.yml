@@ -10,36 +10,38 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-backend:
-    name: Build backend image
+  build-and-deploy:
+    name: Pull latest code, stop old containers, build new images & restart
     runs-on: self-hosted
     steps:
-      - name: Checkout
+      # 1️⃣ Pull the latest code from the main branch
+      - name: Checkout latest code
         uses: actions/checkout@v4
-      - name: Build backend image (load into local Docker)
+        with:
+          fetch-depth: 0
+
+      # 2️⃣ Build the new backend image from the freshly-checked-out code
+      - name: Build backend image (latest code)
         run: |
           docker build \
             -t ghcr.io/${{ github.repository_owner }}/aegis-backend:latest \
             ./apps/backend-api
 
-  build-frontend:
-    name: Build frontend image
-    runs-on: self-hosted
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Build frontend image (load into local Docker)
+      # 3️⃣ Build the new frontend image from the freshly-checked-out code
+      - name: Build frontend image (latest code)
         run: |
           docker build \
             -t ghcr.io/${{ github.repository_owner }}/aegis-frontend:latest \
             ./apps/dashboard-next
 
-  redeploy:
-    name: Recreate backend & frontend containers
-    runs-on: self-hosted
-    needs: [build-backend, build-frontend]
-    steps:
-      - name: Pull latest images (no-op if local)
-        run: docker compose pull || true
-      - name: Force-recreate backend & frontend (old containers are deleted)
-        run: docker compose up -d --force-recreate backend frontend
+      # 4️⃣ Stop the currently-running backend & frontend containers
+      #    (the .env file, nginx/certs/ volume and mongo-data volume are untouched)
+      - name: Stop the currently-running backend & frontend
+        run: |
+          docker compose stop backend frontend
+
+      # 5️⃣ Recreate the containers from the new images – old containers are deleted.
+      #    Secrets (.env) and certificates (nginx/certs/) stay mounted because they live on the host.
+      - name: Recreate backend & frontend with the freshly-built images
+        run: |
+          docker compose up -d --force-recreate backend frontend
