@@ -20,6 +20,20 @@ jobs:
         with:
           fetch-depth: 0
 
+      # 1️⃣b actions/checkout@v4 wipes the runner workspace on every run, so .env
+      # (which is gitignored) is lost. Recreate it from GitHub Secrets before
+      # any docker compose step runs. Use `printf` to avoid YAML / shell escaping bugs.
+      - name: Recreate .env from GitHub Secrets
+        if: always()
+        run: |
+          printf 'GH_OWNER=pranesdev\n'                                                >> .env
+          printf 'MONGO_URI=%s\n'            "${{ secrets.MONGO_URI }}"               >> .env
+          printf 'JWT_SECRET=%s\n'           "${{ secrets.JWT_SECRET }}"              >> .env
+          printf 'PUBLIC_SOCKET_URL=%s\n'    "${{ secrets.PUBLIC_SOCKET_URL }}"       >> .env
+          printf 'NEXT_PUBLIC_FRONTEND_URL=%s\n' "${{ secrets.NEXT_PUBLIC_FRONTEND_URL }}" >> .env
+          echo "✅  .env recreated:"
+          cat .env
+
       # 2️⃣ Build the new backend image from the freshly-checked-out code
       - name: Build backend image (latest code)
         run: |
@@ -34,13 +48,11 @@ jobs:
             -t ghcr.io/pranesdev/aegis-frontend:latest \
             ./apps/dashboard-next
 
-      # 4️⃣ Stop the currently-running backend & frontend containers.
-      #    ${{ github.workspace }} resolves to the runner's checkout directory,
-      #    which is where docker-compose.yml and the real .env live.
+      # 4️⃣ Stop the currently-running backend & frontend containers (idempotent).
       - name: Stop the currently-running backend & frontend
         run: |
           cd ${{ github.workspace }}
-          docker compose stop backend frontend
+          docker compose stop backend frontend || true
 
       # 5️⃣ Recreate the containers from the new images – old ones are deleted.
       - name: Recreate backend & frontend with the freshly-built images

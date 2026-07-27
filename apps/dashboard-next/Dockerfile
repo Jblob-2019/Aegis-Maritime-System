@@ -20,8 +20,8 @@ RUN npm run build
 FROM node:22-alpine AS runtime
 WORKDIR /app
 
-# Tools needed for IP detection
-RUN apk add --no-cache curl iproute2
+# No extra packages needed – the env-injection script only writes a
+# static file based on env vars provided by docker-compose.yml.
 
 # Copy the built "standalone" output from the builder
 COPY --from=builder /app/.next/standalone ./
