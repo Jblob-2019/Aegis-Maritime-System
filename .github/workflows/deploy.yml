@@ -20,11 +20,24 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 1️⃣b Re-create the .env symlink. actions/checkout@v4 wipes the runner
-      # workspace on every run, so we recreate a symlink pointing to the
-      # persistent secret file outside the workspace. docker compose reads
-      # the symlink transparently, so the same .env (with MONGO_URI, JWT_SECRET,
-      # PUBLIC_SOCKET_URL, etc.) is reused on every deploy.
+      # 1️⃣a Free ports 3000 (frontend) and 4000 (backend) so the new
+      # containers can bind cleanly. Kills any process holding either port.
+      - name: Free ports 3000 and 4000
+        run: |
+          for port in 3000 4000; do
+            pid=$(ss -ltnp "sport = :$port" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -n1)
+            if [ -n "$pid" ]; then
+              echo "Port $port is held by PID $pid — killing"
+              kill -9 "$pid" 2>/dev/null || true
+              sleep 1
+            else
+              echo "Port $port is free"
+            fi
+          done
+
+      # 1️⃣b Restore .env from persistent location. actions/checkout@v4 wipes
+      # the runner workspace on every run, so we recreate a symlink pointing
+      # to the persistent secret file outside the workspace.
       - name: Restore .env from persistent location
         run: |
           ln -sf /home/jana/aegis-secrets/.env "$GITHUB_WORKSPACE/.env"
@@ -45,18 +58,15 @@ jobs:
             -t ghcr.io/pranesdev/aegis-frontend:latest \
             ./apps/dashboard-next
 
-      # 4️⃣ Stop the running backend & frontend containers and free their ports.
-      #    --remove-orphans ensures any stray containers from previous runs are
-      #    cleaned up, and `|| true` keeps the step idempotent.
+      # 4️⃣ Stop and remove the running backend & frontend containers.
+      #    `rm -f` deletes them so the host ports are guaranteed free.
       - name: Stop and remove existing backend & frontend containers
         run: |
           cd ${{ github.workspace }}
           docker compose stop backend frontend || true
-          docker compose rm -f backend frontend || true
+          docker compose rm -f  backend frontend || true
 
       # 5️⃣ Recreate the containers from the freshly-built images.
-      #    --force-recreate is redundant after rm, but keeps the step safe even
-      #    if the previous step somehow missed a container.
       - name: Deploy new backend & frontend
         run: |
           cd ${{ github.workspace }}
