@@ -24,14 +24,14 @@ jobs:
       - name: Build backend image (latest code)
         run: |
           docker build \
-            -t ghcr.io/${{ github.repository_owner }}/aegis-backend:latest \
+            -t ghcr.io/pranesdev/aegis-backend:latest \
             ./apps/backend-api
 
       # 3️⃣ Build the new frontend image from the freshly-checked-out code
       - name: Build frontend image (latest code)
         run: |
           docker build \
-            -t ghcr.io/${{ github.repository_owner }}/aegis-frontend:latest \
+            -t ghcr.io/pranesdev/aegis-frontend:latest \
             ./apps/dashboard-next
 
       # 4️⃣ Stop the currently-running backend & frontend containers.
