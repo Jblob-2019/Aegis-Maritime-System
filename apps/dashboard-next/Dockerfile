@@ -20,8 +20,8 @@ RUN npm run build
 FROM node:22-alpine AS runtime
 WORKDIR /app
 
-# No extra packages needed – the env-injection script only writes a
-# static file based on env vars provided by docker-compose.yml.
+# Tools needed for IP detection (ip route, hostname -I)
+RUN apk add --no-cache iproute2 curl
 
 # Copy the built "standalone" output from the builder
 COPY --from=builder /app/.next/standalone ./
@@ -42,6 +42,11 @@ EXPOSE 3000
 
 # Run as non-root for defense-in-depth
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+# Give the non-root user ownership of the app directory (including /app/public)
+# so inject-env.sh can write /app/public/env.js at container start.
+RUN chown -R appuser:appgroup /app
+
 USER appuser
 
 # Run the script, then start the Next.js server

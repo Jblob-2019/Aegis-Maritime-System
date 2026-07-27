@@ -59,9 +59,15 @@ const FRONTEND_URL = process.env.FRONTEND_URL
 const MONGO_URI = process.env.MONGO_URI
 
 if (!MONGO_URI) {
-  console.error('❌ MONGO_URI is not set. Aborting.')
+  console.error('❌ MONGO_URI is not set – backend cannot connect to MongoDB Atlas.')
+  console.error('   Make sure docker-compose.yml has env_file: .env and the host .env exists.')
   process.exit(1)
 }
+
+// Mask the password before logging so we don't leak secrets to the log output.
+const maskedUri = MONGO_URI.replace(/(mongodb(?:\+srv)?:\/\/[^:]+:)([^@]+)(@)/, '$1***$3')
+console.log('🔧 Backend starting with PORT=', PORT)
+console.log('🔧 MONGO_URI =', maskedUri)
 
 // CORS: require FRONTEND_URL to be set explicitly in production. Refuse the
 // wildcard so a misconfigured deploy doesn't expose the API to any origin.
@@ -93,7 +99,12 @@ const io = new Server(server, { cors: corsOptions })
 // ---------------------------------------------------------------------------
 
 mongoose
-  .connect(MONGO_URI)
+  .connect(MONGO_URI, {
+    // Time out quickly if the Atlas cluster can't be reached so we see the
+    // error in the logs instead of hanging silently.
+    serverSelectionTimeoutMS: 10_000,
+    connectTimeoutMS: 10_000,
+  })
   .then(() => console.log('✅ MongoDB Atlas Connected!'))
   .catch((err) => console.log('❌ MongoDB Connection Error:', err))
 

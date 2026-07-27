@@ -21,53 +21,68 @@ jobs:
           fetch-depth: 0
 
       # 1️⃣a Free ports 3000 (frontend) and 4000 (backend) so the new
-      # containers can bind cleanly. Kills any process holding either port.
+      # containers can bind cleanly. Kills any process (Docker, Node,
+      # system) that is still holding either port.
       - name: Free ports 3000 and 4000
         run: |
           for port in 3000 4000; do
+            # 1) Try ss (most reliable for Docker-published ports)
             pid=$(ss -ltnp "sport = :$port" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -n1)
             if [ -n "$pid" ]; then
-              echo "Port $port is held by PID $pid — killing"
+              echo "Port $port is held by PID $pid (ss) — killing"
               kill -9 "$pid" 2>/dev/null || true
               sleep 1
-            else
-              echo "Port $port is free"
             fi
+            # 2) Fallback: lsof (handles processes bound via different namespaces)
+            if command -v lsof >/dev/null 2>&1; then
+              pid=$(lsof -ti tcp:$port 2>/dev/null | head -n1)
+              if [ -n "$pid" ]; then
+                echo "Port $port is held by PID $pid (lsof) — killing"
+                kill -9 "$pid" 2>/dev/null || true
+                sleep 1
+              fi
+            fi
+            # 3) Last resort: kill any stray node process left over from a
+            #    previous `node src/api-server.js` (this is exactly the case
+            #    that bit us when a host node process held port 4000).
+            if pgrep -af "node src/api-server.js" >/dev/null; then
+              echo "Found stray node api-server.js process — killing"
+              pkill -9 -f "node src/api-server.js" || true
+              sleep 1
+            fi
+            echo "Port $port is now free"
           done
 
-      # 1️⃣b Restore .env from persistent location. actions/checkout@v4 wipes
-      # the runner workspace on every run, so we recreate a symlink pointing
-      # to the persistent secret file outside the workspace.
+      # 1️⃣b Restore .env symlink from persistent host path.
       - name: Restore .env from persistent location
         run: |
           ln -sf /home/jana/aegis-secrets/.env "$GITHUB_WORKSPACE/.env"
           echo "✅  .env symlinked:"
           ls -la "$GITHUB_WORKSPACE/.env"
 
-      # 2️⃣ Build the new backend image from the freshly-checked-out code
+      # 2️⃣ Build the new backend image
       - name: Build backend image (latest code)
         run: |
           docker build \
             -t ghcr.io/pranesdev/aegis-backend:latest \
             ./apps/backend-api
 
-      # 3️⃣ Build the new frontend image from the freshly-checked-out code
+      # 3️⃣ Build the new frontend image
       - name: Build frontend image (latest code)
         run: |
           docker build \
             -t ghcr.io/pranesdev/aegis-frontend:latest \
             ./apps/dashboard-next
 
-      # 4️⃣ Stop and remove the running backend & frontend containers.
-      #    `rm -f` deletes them so the host ports are guaranteed free.
+      # 4️⃣ Stop & remove the old backend & frontend containers.
       - name: Stop and remove existing backend & frontend containers
         run: |
           cd ${{ github.workspace }}
           docker compose stop backend frontend || true
           docker compose rm -f  backend frontend || true
 
-      # 5️⃣ Recreate the containers from the freshly-built images.
-      - name: Deploy new backend & frontend
+      # 5️⃣ Bring the entire stack up.
+      - name: Start up the full stack
         run: |
           cd ${{ github.workspace }}
-          docker compose up -d --force-recreate backend frontend
+          docker compose up -d backend frontend nginx watchtower
