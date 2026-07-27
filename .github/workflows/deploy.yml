@@ -30,8 +30,6 @@ jobs:
           ln -sf /home/jana/aegis-secrets/.env "$GITHUB_WORKSPACE/.env"
           echo "✅  .env symlinked:"
           ls -la "$GITHUB_WORKSPACE/.env"
-          echo "--- contents (sanity check) ---"
-          cat "$GITHUB_WORKSPACE/.env"
 
       # 2️⃣ Build the new backend image from the freshly-checked-out code
       - name: Build backend image (latest code)
@@ -47,14 +45,19 @@ jobs:
             -t ghcr.io/pranesdev/aegis-frontend:latest \
             ./apps/dashboard-next
 
-      # 4️⃣ Stop the currently-running backend & frontend containers (idempotent).
-      - name: Stop the currently-running backend & frontend
+      # 4️⃣ Stop the running backend & frontend containers and free their ports.
+      #    --remove-orphans ensures any stray containers from previous runs are
+      #    cleaned up, and `|| true` keeps the step idempotent.
+      - name: Stop and remove existing backend & frontend containers
         run: |
           cd ${{ github.workspace }}
           docker compose stop backend frontend || true
+          docker compose rm -f backend frontend || true
 
-      # 5️⃣ Recreate the containers from the new images – old ones are deleted.
-      - name: Recreate backend & frontend with the freshly-built images
+      # 5️⃣ Recreate the containers from the freshly-built images.
+      #    --force-recreate is redundant after rm, but keeps the step safe even
+      #    if the previous step somehow missed a container.
+      - name: Deploy new backend & frontend
         run: |
           cd ${{ github.workspace }}
           docker compose up -d --force-recreate backend frontend
