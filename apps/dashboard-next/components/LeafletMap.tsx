@@ -33,7 +33,7 @@ type BoatMarkerData = {
   timestamp?: string
 }
 
-type TurfLineFeature = turf.Feature<turf.LineString | turf.MultiLineString>
+type TurfLineFeature = turf.feature<turf.LineString | turf.MultiLineString>
 
 // ─── Tamil Nadu Coastline + Distance Zones ─────────────────────────────────
 // Coordinates are [lat, lng]
