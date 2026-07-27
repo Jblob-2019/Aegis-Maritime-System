@@ -32,7 +32,7 @@ export default function Navbar() {
             </svg>
           </div>
           <div>
-            <p className="text-sm font-bold text-white leading-tight">Smart Maritime Boundary Detection System</p>
+            <p className="text-sm font-bold text-white leading-tight">Smart in Jana</p>
             <p className="text-[10px] text-cyan-400/70 tracking-widest uppercase">AEGIS</p>
           </div>
         </div>

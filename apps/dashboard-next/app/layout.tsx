@@ -8,9 +8,9 @@ const geist = Geist({ subsets: ["latin"], variable: "--font-geist-sans" })
 const geistMono = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono" })
 
 export const metadata: Metadata = {
-  title: 'Smart Maritime Boundary Monitoring System',
-  description: 'Created with v0',
-  generator: 'v0.app',
+  title: 'Smart in Jana',
+  description: 'Smart maritime boundary monitoring for the Tamil Nadu coast',
+  generator: 'pranesdev',
   icons: {
     icon: '/image.png',
     apple: '/image.png',
