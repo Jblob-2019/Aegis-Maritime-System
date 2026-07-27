@@ -1,6 +1,6 @@
 services:
   backend:
-    image: ghcr.io/${GH_OWNER}/aegis-backend:latest
+    image: ghcr.io/pranesdev/aegis-backend:latest
     restart: unless-stopped
     environment:
       MONGO_URI: ${MONGO_URI}
@@ -12,7 +12,7 @@ services:
       - "com.centurylinklabs.watchtower.enable=true"
 
   frontend:
-    image: ghcr.io/${GH_OWNER}/aegis-frontend:latest
+    image: ghcr.io/pranesdev/aegis-frontend:latest
     restart: unless-stopped
     depends_on:
       - backend
