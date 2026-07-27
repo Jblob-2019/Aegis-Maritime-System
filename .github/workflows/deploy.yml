@@ -20,24 +20,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 1️⃣b Create the .env file from GitHub Secrets so docker compose has the variables it needs.
-      # If a secret is missing, fall back to the existing .env on the server so secrets already
-      # stored there are reused.
-      - name: Create .env from GitHub Secrets (fallback to existing .env)
-        run: |
-          if [ ! -f .env ]; then
-            echo "Creating .env from secrets"
-            cat > .env << EOF
-          GH_OWNER=${{ github.repository_owner }}
-          MONGO_ROOT_USER=${{ secrets.MONGO_ROOT_USER }}
-          MONGO_ROOT_PASSWORD=${{ secrets.MONGO_ROOT_PASSWORD }}
-          JWT_SECRET=${{ secrets.JWT_SECRET }}
-          PUBLIC_SOCKET_URL=${{ secrets.PUBLIC_SOCKET_URL }}
-          EOF
-          else
-            echo "Using existing .env on the runner"
-          fi
-
       # 2️⃣ Build the new backend image from the freshly-checked-out code
       - name: Build backend image (latest code)
         run: |
@@ -53,12 +35,12 @@ jobs:
             ./apps/dashboard-next
 
       # 4️⃣ Stop the currently-running backend & frontend containers
-      #    (.env, nginx/certs/, mongo-data remain untouched on the host)
+      #    (.env, nginx/certs/ remain untouched on the host)
       - name: Stop the currently-running backend & frontend
-        run: |
-          docker compose stop backend frontend
+        working-directory: /home/jana/Aegis-Maritime-System
+        run: docker compose stop backend frontend
 
       # 5️⃣ Recreate the containers from the new images – old ones are deleted.
       - name: Recreate backend & frontend with the freshly-built images
-        run: |
-          docker compose up -d --force-recreate backend frontend
+        working-directory: /home/jana/Aegis-Maritime-System
+        run: docker compose up -d --force-recreate backend frontend
