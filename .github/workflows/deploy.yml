@@ -20,19 +20,18 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 1️⃣b actions/checkout@v4 wipes the runner workspace on every run, so .env
-      # (which is gitignored) is lost. Recreate it from GitHub Secrets before
-      # any docker compose step runs. Use `printf` to avoid YAML / shell escaping bugs.
-      - name: Recreate .env from GitHub Secrets
-        if: always()
+      # 1️⃣b Re-create the .env symlink. actions/checkout@v4 wipes the runner
+      # workspace on every run, so we recreate a symlink pointing to the
+      # persistent secret file outside the workspace. docker compose reads
+      # the symlink transparently, so the same .env (with MONGO_URI, JWT_SECRET,
+      # PUBLIC_SOCKET_URL, etc.) is reused on every deploy.
+      - name: Restore .env from persistent location
         run: |
-          printf 'GH_OWNER=pranesdev\n'                                                >> .env
-          printf 'MONGO_URI=%s\n'            "${{ secrets.MONGO_URI }}"               >> .env
-          printf 'JWT_SECRET=%s\n'           "${{ secrets.JWT_SECRET }}"              >> .env
-          printf 'PUBLIC_SOCKET_URL=%s\n'    "${{ secrets.PUBLIC_SOCKET_URL }}"       >> .env
-          printf 'NEXT_PUBLIC_FRONTEND_URL=%s\n' "${{ secrets.NEXT_PUBLIC_FRONTEND_URL }}" >> .env
-          echo "✅  .env recreated:"
-          cat .env
+          ln -sf /home/jana/aegis-secrets/.env "$GITHUB_WORKSPACE/.env"
+          echo "✅  .env symlinked:"
+          ls -la "$GITHUB_WORKSPACE/.env"
+          echo "--- contents (sanity check) ---"
+          cat "$GITHUB_WORKSPACE/.env"
 
       # 2️⃣ Build the new backend image from the freshly-checked-out code
       - name: Build backend image (latest code)
