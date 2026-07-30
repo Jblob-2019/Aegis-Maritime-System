@@ -43,9 +43,9 @@ export default function LoginPage() {
         router.push('/my-boat'); 
       }
 
-    } catch (err) {
-      if (err.response) {
-        setError(err.response.data.message || 'Invalid credentials. Access Denied.');
+    } catch (err: any) {
+      if (err?.response) {
+        setError(err.response.data?.message || 'Invalid credentials. Access Denied.');
       } else {
         setError('Cannot connect to the server. Uplink failed.');
       }

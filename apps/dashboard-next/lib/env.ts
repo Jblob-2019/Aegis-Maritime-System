@@ -13,18 +13,35 @@
 
 export function getRuntimeEnv() {
   if (typeof window !== "undefined" && (window as any).__ENV__) {
-    return (window as any).__ENV__
+    const env = (window as any).__ENV__
+    if (env.NEXT_PUBLIC_BACKEND_URL && !env.NEXT_PUBLIC_BACKEND_URL.includes("yourdomain.com")) {
+      return env
+    }
   }
 
   const buildApi =
     process.env.NEXT_PUBLIC_API_URL ||
-    process.env.NEXT_PUBLIC_BACKEND_URL ||
-    "http://localhost:4000"
+    process.env.NEXT_PUBLIC_BACKEND_URL
+
+  if (buildApi && !buildApi.includes("yourdomain.com")) {
+    return {
+      NEXT_PUBLIC_BACKEND_URL: buildApi,
+      NEXT_PUBLIC_API_URL: buildApi,
+      NEXT_PUBLIC_SOCKET_URL: process.env.NEXT_PUBLIC_SOCKET_URL || buildApi,
+    }
+  }
+
+  // Dynamic browser fallback: automatically connect to backend port 4000 on current hostname
+  let dynamicBackendUrl = "http://localhost:4000"
+  if (typeof window !== "undefined" && window.location) {
+    const protocol = window.location.protocol || "http:"
+    const hostname = window.location.hostname || "localhost"
+    dynamicBackendUrl = `${protocol}//${hostname}:4000`
+  }
 
   return {
-    NEXT_PUBLIC_BACKEND_URL: buildApi,
-    NEXT_PUBLIC_API_URL: buildApi,
-    NEXT_PUBLIC_SOCKET_URL:
-      process.env.NEXT_PUBLIC_SOCKET_URL || buildApi,
+    NEXT_PUBLIC_BACKEND_URL: dynamicBackendUrl,
+    NEXT_PUBLIC_API_URL: dynamicBackendUrl,
+    NEXT_PUBLIC_SOCKET_URL: dynamicBackendUrl,
   }
 }
