@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation'; // Next.js specific router
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
 import { getRuntimeEnv } from '@/lib/env';
 
 export default function LoginPage() {
@@ -43,8 +43,8 @@ export default function LoginPage() {
         router.push('/my-boat'); 
       }
 
-    } catch (err: any) {
-      if (err?.response) {
+    } catch (err) {
+      if (axios.isAxiosError(err) && err.response) {
         setError(err.response.data?.message || 'Invalid credentials. Access Denied.');
       } else {
         setError('Cannot connect to the server. Uplink failed.');
@@ -77,7 +77,7 @@ export default function LoginPage() {
               type="text" 
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="w-full bg-gray-800/50 border border-gray-600 text-white rounded px-4 py-3 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-colors font-mono"
+              className="w-full bg-gray-800/50 border border-gray-600 text-white rounded px-4 py-3 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-colors"
               placeholder="Enter ID..."
               required 
             />
@@ -89,7 +89,7 @@ export default function LoginPage() {
               type="password" 
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full bg-gray-800/50 border border-gray-600 text-white rounded px-4 py-3 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-colors font-mono"
+              className="w-full bg-gray-800/50 border border-gray-600 text-white rounded px-4 py-3 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-colors"
               placeholder="••••••••"
               required 
             />
@@ -97,7 +97,7 @@ export default function LoginPage() {
 
           <button 
             type="submit" 
-            className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-3 px-4 rounded transition-colors duration-200 font-mono tracking-widest mt-4 shadow-[0_0_15px_rgba(8,145,178,0.5)] hover:shadow-[0_0_25px_rgba(8,145,178,0.8)]"
+            className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-3 px-4 rounded transition-colors duration-200 font-mono tracking-widest mt-4"
           >
             INITIALIZE UPLINK
           </button>
