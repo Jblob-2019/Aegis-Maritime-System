@@ -1,8 +1,7 @@
 # Dockerfile for the AEGIS Next.js dashboard (apps/dashboard-next)
 # Multi-stage build that produces a lightweight, production-ready image.
-# At runtime, inject-env.sh detects the host's LAN IP and writes
-# /app/public/env.js so the browser can reach the backend at the
-# correct address automatically.
+# At runtime, inject-env.sh writes /app/public/env.js so the browser
+# can reach the backend at the configured host IP.
 # ------------------------------------------------------------
 # 1️⃣ Build stage – install ALL deps (devDependencies are needed for the build)
 #    and compile the Next.js app.
@@ -21,10 +20,6 @@ RUN npm run build
 FROM node:22-alpine AS runtime
 WORKDIR /app
 
-# Tools needed by inject-env.sh (ip route for LAN IP detection,
-# curl as a fallback to api.ipify.org).
-RUN apk add --no-cache iproute2 curl
-
 # Copy the built "standalone" output from the builder
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
@@ -37,9 +32,6 @@ RUN chmod +x /usr/local/bin/inject-env.sh
 # Production environment
 ENV NODE_ENV=production
 ENV PORT=3000
-# Default backend port the inject-env.sh script will use if BACKEND_PORT
-# is not set via docker-compose.yml. Keep this in sync with the backend.
-ENV BACKEND_PORT=4000
 EXPOSE 3000
 
 # Run as non-root for defense-in-depth
