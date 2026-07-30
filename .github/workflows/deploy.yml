@@ -111,3 +111,39 @@ jobs:
           done
           echo "❌  Stack failed to come up after 3 attempts"
           exit 1
+
+      # 7️⃣ Verify the wiring end-to-end so we see exactly what the browser will see.
+      - name: Verify frontend-backend wiring
+        run: |
+          set +e
+          echo "── waiting for backend to be healthy ──"
+          for i in {1..15}; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:4000/health || true)
+            if [ "$code" = "200" ]; then
+              echo "✅  Backend /health returned 200"
+              curl -s http://localhost:4000/health
+              echo
+              break
+            fi
+            echo "…attempt $i (got: $code)"
+            sleep 2
+          done
+
+          echo
+          echo "── /api/location/latest via direct backend ──"
+          curl -s http://localhost:4000/api/location/latest | head -c 400
+          echo
+
+          echo
+          echo "── /api/location/latest via Nginx (port 80) ──"
+          curl -s http://localhost/api/location/latest | head -c 400
+          echo
+
+          echo
+          echo "── /api/alerts via Nginx ──"
+          curl -s http://localhost/api/alerts | head -c 400
+          echo
+
+          echo
+          echo "── frontend container env.js (what the browser sees) ──"
+          docker exec aegis-frontend cat /app/public/env.js 2>/dev/null || echo "(no env.js yet)"
