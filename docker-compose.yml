@@ -17,7 +17,10 @@ services:
     depends_on:
       - backend
     environment:
-      NEXT_PUBLIC_API_URL: http://backend:4000
+      # Browser-facing URLs are injected at runtime by inject-env.sh
+      # (see apps/dashboard-next/inject-env.sh). No need to bake anything
+      # in here — the runtime script figures out the host LAN IP and writes
+      # /app/public/env.js so the browser connects correctly.
       NEXT_PUBLIC_SOCKET_URL: ${PUBLIC_SOCKET_URL}
     ports:
       - "3000:3000"
