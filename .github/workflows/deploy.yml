@@ -21,19 +21,30 @@ jobs:
           fetch-depth: 0
 
       # 1️⃣a Free ports 3000 (frontend) and 4000 (backend) so the new
-      # containers can bind cleanly. Kills any process (Docker, Node,
-      # system) that is still holding either port.
+      # containers can bind cleanly. Prefer stopping the Docker container
+      # that publishes the port (safer than killing arbitrary processes).
       - name: Free ports 3000 and 4000
         run: |
           for port in 3000 4000; do
-            # 1) Try ss (most reliable for Docker-published ports)
+            # 1) If a Docker container publishes this port, stop it.
+            container=$(docker ps --format '{{.ID}} {{.Ports}}' \
+                        | awk -v p=":$port" '$0 ~ p {print $1; exit}')
+            if [ -n "$container" ]; then
+              echo "Port $port is published by container $container — stopping"
+              docker stop "$container" 2>/dev/null || true
+              docker rm -f "$container" 2>/dev/null || true
+              sleep 1
+            fi
+
+            # 2) Fallback: anything still bound via ss.
             pid=$(ss -ltnp "sport = :$port" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -n1)
             if [ -n "$pid" ]; then
               echo "Port $port is held by PID $pid (ss) — killing"
               kill -9 "$pid" 2>/dev/null || true
               sleep 1
             fi
-            # 2) Fallback: lsof
+
+            # 3) Fallback: lsof, if installed.
             if command -v lsof >/dev/null 2>&1; then
               pid=$(lsof -ti tcp:$port 2>/dev/null | head -n1)
               if [ -n "$pid" ]; then
@@ -42,20 +53,23 @@ jobs:
                 sleep 1
               fi
             fi
-            # 3) Last resort: kill stray node api-server.js
-            if pgrep -af "node src/api-server.js" >/dev/null; then
-              echo "Found stray node api-server.js process — killing"
-              pkill -9 -f "node src/api-server.js" || true
-              sleep 1
-            fi
+
             echo "Port $port is now free"
           done
 
-      # 1️⃣b Restore .env symlink from persistent host path.
-      - name: Restore .env from persistent location
+      # 1️⃣b Copy .env into the workspace as a regular file (not a symlink).
+      #     Docker bind-mounting a symlink to an external path can confuse
+      #     runc and produce "error mounting ..." failures. cp -a keeps the
+      #     file inside the workspace so the bind is unambiguous.
+      - name: Restore .env into workspace (regular file)
         run: |
-          ln -sf /home/jana/aegis-secrets/.env "$GITHUB_WORKSPACE/.env"
-          echo "✅  .env symlinked:"
+          if [ ! -f /home/jana/aegis-secrets/.env ]; then
+            echo "❌  /home/jana/aegis-secrets/.env is missing"
+            exit 1
+          fi
+          cp -a /home/jana/aegis-secrets/.env "$GITHUB_WORKSPACE/.env"
+          chmod 644 "$GITHUB_WORKSPACE/.env"
+          echo "✅  .env copied into workspace:"
           ls -la "$GITHUB_WORKSPACE/.env"
 
       # 2️⃣ Build the new backend image
@@ -79,12 +93,10 @@ jobs:
           docker compose stop backend frontend || true
           docker compose rm -f  backend frontend || true
 
-      # 5️⃣ Pre-pull external base images (nginx, watchtower) with retry.
-      #    This avoids the "connection reset by peer" errors from Docker Hub
-      #    by giving the pull multiple attempts before docker compose runs.
-      - name: Pre-pull nginx and watchtower with retry
+      # 5️⃣ Pre-pull external base images with retry.
+      - name: Pre-pull caddy and watchtower with retry
         run: |
-          for img in caddy:2 nginx:alpine containrrr/watchtower; do
+          for img in caddy:2 containrrr/watchtower; do
             for attempt in {1..4}; do
               echo "Pulling $img (attempt $attempt/4)…"
               if docker pull "$img"; then
@@ -96,7 +108,7 @@ jobs:
             done
           done
 
-      # 6️⃣ Bring the entire stack up (with retry on transient errors).
+      # 6️⃣ Bring the entire stack up — with diagnostics if compose fails.
       - name: Start up the full stack
         run: |
           cd ${{ github.workspace }}
@@ -106,13 +118,18 @@ jobs:
               echo "✅  Stack is up"
               exit 0
             fi
-            echo "❌  Compose up failed, retrying in 10s…"
+            echo "❌  Compose up failed, collecting diagnostics…"
+            docker compose ps --all || true
+            docker compose logs --tail 200 --no-color || true
+            # Inspect the most likely failing container (caddy mounts a host path).
+            docker inspect aegis-maritime-system-caddy-1 2>/dev/null || true
+            echo "Retrying in 10s…"
             sleep 10
           done
           echo "❌  Stack failed to come up after 3 attempts"
           exit 1
 
-      # 7️⃣ Verify the wiring end-to-end so we see exactly what the browser will see.
+      # 7️⃣ Verify the wiring end-to-end.
       - name: Verify frontend-backend wiring
         run: |
           set +e
@@ -143,7 +160,3 @@ jobs:
           echo "── /api/alerts via Caddy ──"
           curl -s http://localhost/api/alerts | head -c 400
           echo
-
-          echo
-          echo "── frontend container env.js (what the browser sees) ──"
-          docker exec aegis-frontend cat /app/public/env.js 2>/dev/null || echo "(no env.js yet)"
