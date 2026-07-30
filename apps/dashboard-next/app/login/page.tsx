@@ -45,7 +45,7 @@ export default function LoginPage() {
 
     } catch (err) {
       if (axios.isAxiosError(err) && err.response) {
-        setError(err.response.data.message || 'Invalid credentials. Access Denied.');
+        setError(err.response.data?.message || 'Invalid credentials. Access Denied.');
       } else {
         setError('Cannot connect to the server. Uplink failed.');
       }

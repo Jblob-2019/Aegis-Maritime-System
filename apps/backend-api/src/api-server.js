@@ -69,18 +69,12 @@ const maskedUri = MONGO_URI.replace(/(mongodb(?:\+srv)?:\/\/[^:]+:)([^@]+)(@)/, 
 console.log('🔧 Backend starting with PORT=', PORT)
 console.log('🔧 MONGO_URI =', maskedUri)
 
-// CORS: require FRONTEND_URL to be set explicitly in production. Refuse the
-// wildcard so a misconfigured deploy doesn't expose the API to any origin.
-if (!FRONTEND_URL || FRONTEND_URL === '*') {
-  console.warn(
-    '⚠️  FRONTEND_URL is not set (or is "*"). Falling back to same-origin only. ' +
-      'Set FRONTEND_URL to the deployed dashboard origin to allow cross-origin requests.',
-  )
-}
-const corsOrigin = FRONTEND_URL && FRONTEND_URL !== '*' ? FRONTEND_URL : false
+// CORS: allow FRONTEND_URL if set, otherwise reflect request origin to enable cross-origin API calls & WebSockets.
+const corsOrigin = FRONTEND_URL && FRONTEND_URL !== '*' ? FRONTEND_URL : true
 const corsOptions = {
-  origin: corsOrigin, // false = no CORS (same-origin only)
-  methods: ['GET', 'POST'],
+  origin: corsOrigin,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
 }
 
 // ---------------------------------------------------------------------------
