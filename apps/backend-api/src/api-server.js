@@ -7,6 +7,7 @@ import express from 'express'
 import cors from 'cors'
 import mongoose from 'mongoose'
 import http from 'node:http'
+import crypto from 'node:crypto'
 import { Server } from 'socket.io'
 
 // ---------------------------------------------------------------------------
@@ -187,16 +188,88 @@ app.post('/api/auth/login', (req, res) => {
     return res.status(401).json({ message: 'Invalid credentials. Access Denied.' })
   }
 
-  // Token: short opaque string. In production this would be a JWT signed
-  // with JWT_SECRET. We pass back a base64 timestamp so the existing
-  // front-end (which only stores it in localStorage) keeps working.
-  const token = Buffer.from(`${username}:${Date.now()}`).toString('base64')
+  // Cryptographically sign a standard JWT token using HMAC-SHA256
+  const token = signJwt({ username, role: 'admin' }, 86400)
   res.json({
     role: 'admin',
     token,
     boatId: null,
   })
 })
+
+/**
+ * Sign a JWT token using HMAC SHA256.
+ * @param {object} payload
+ * @param {number} [expiresInSeconds=86400]
+ * @returns {string}
+ */
+function signJwt(payload, expiresInSeconds = 86400) {
+  const jwtSecret = process.env.JWT_SECRET || 'aegis-super-secret-key-2026'
+  const header = { alg: 'HS256', typ: 'JWT' }
+  const now = Math.floor(Date.now() / 1000)
+  const fullPayload = { ...payload, iat: now, exp: now + expiresInSeconds }
+
+  const base64Header = Buffer.from(JSON.stringify(header)).toString('base64url')
+  const base64Payload = Buffer.from(JSON.stringify(fullPayload)).toString('base64url')
+  const signature = crypto
+    .createHmac('sha256', jwtSecret)
+    .update(`${base64Header}.${base64Payload}`)
+    .digest('base64url')
+
+  return `${base64Header}.${base64Payload}.${signature}`
+}
+
+/**
+ * Verify a JWT token string.
+ * @param {string} token
+ * @returns {object|null}
+ */
+function verifyJwt(token) {
+  if (!token || typeof token !== 'string') return null
+  const parts = token.split('.')
+  if (parts.length !== 3) return null
+
+  const [base64Header, base64Payload, signature] = parts
+  const jwtSecret = process.env.JWT_SECRET || 'aegis-super-secret-key-2026'
+  const expectedSig = crypto
+    .createHmac('sha256', jwtSecret)
+    .update(`${base64Header}.${base64Payload}`)
+    .digest('base64url')
+
+  try {
+    if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig))) {
+      return null
+    }
+    const payload = JSON.parse(Buffer.from(base64Payload, 'base64url').toString('utf8'))
+    const now = Math.floor(Date.now() / 1000)
+    if (payload.exp && payload.exp < now) return null
+    return payload
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Middleware to authenticate requests via Bearer JWT token.
+ * @param {Request} req
+ * @param {Response} res
+ * @param {import('express').NextFunction} next
+ */
+function authenticateJwt(req, res, next) {
+  const authHeader = req.headers.authorization
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ message: 'Authorization token required' })
+  }
+
+  const token = authHeader.substring(7)
+  const payload = verifyJwt(token)
+  if (!payload) {
+    return res.status(401).json({ message: 'Invalid or expired token' })
+  }
+
+  req.user = payload
+  next()
+}
 
 // ---------------------------------------------------------------------------
 // 2d. Input validation helpers
@@ -418,9 +491,34 @@ app.get('/api/alerts', async (req, res) => {
 })
 
 // ---------------------------------------------------------------------------
-// Start the server
+// Error Handling & Graceful Shutdown
 // ---------------------------------------------------------------------------
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Server running on http://0.0.0.0:${PORT}`)
+// Centralized Express Error Handler
+app.use((err, _req, res, _next) => {
+  console.error('🔥 Unhandled Express Error:', err)
+  res.status(err.status || 500).json({
+    error: 'Internal Server Error',
+    message: process.env.NODE_ENV === 'production' ? 'An unexpected error occurred' : err.message,
+  })
 })
+
+// Start the server
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Aegis Backend API running on http://0.0.0.0:${PORT}`)
+})
+
+// Graceful process teardown
+function shutdownGracefully(signal) {
+  console.log(`\n🛑 ${signal} signal received. Initiating graceful shutdown...`)
+  server.close(() => {
+    console.log('HTTP & Socket.IO servers closed.')
+    mongoose.connection.close(false).then(() => {
+      console.log('MongoDB Atlas connection closed.')
+      process.exit(0)
+    })
+  })
+}
+
+process.on('SIGINT', () => shutdownGracefully('SIGINT'))
+process.on('SIGTERM', () => shutdownGracefully('SIGTERM'))

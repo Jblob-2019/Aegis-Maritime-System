@@ -1,4 +1,4 @@
-﻿"use client"
+"use client"
 
 import { useState, useCallback, useEffect, useRef } from "react"
 import dynamic from "next/dynamic"
@@ -223,9 +223,11 @@ export default function MaritimeDashboard() {
       } catch { /* backend offline */ }
     }
     load()
-    const id = setInterval(load, 10_000)
+    // Poll fallback: interval runs every 20s if sockets are disconnected, otherwise every 60s sync
+    const pollInterval = serverStatus === "Backend Connected" ? 60_000 : 20_000
+    const id = setInterval(load, pollInterval)
     return () => clearInterval(id)
-  }, [])
+  }, [serverStatus, selectedBoatId])
 
   const handleSearch = () => {
     if (!vesselId.trim()) return
