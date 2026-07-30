@@ -6,8 +6,8 @@ services:
       MONGO_URI: ${MONGO_URI}
       PORT: 4000
       JWT_SECRET: ${JWT_SECRET}
-    ports:
-      - "4000:4000"
+    expose:
+      - "4000"   # reachable from the Docker network (Caddy), not the host directly
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
@@ -17,30 +17,29 @@ services:
     depends_on:
       - backend
     environment:
-      # Browser-facing URLs are injected at runtime by inject-env.sh
-      # (see apps/dashboard-next/inject-env.sh). No need to bake anything
-      # in here — the runtime script figures out the host LAN IP and writes
-      # /app/public/env.js so the browser connects correctly.
+      # Same-origin strategy: the browser talks to its own host on port 80,
+      # Caddy proxies /api/* and /socket.io/* to the backend container.
       NEXT_PUBLIC_SOCKET_URL: ${PUBLIC_SOCKET_URL}
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"   # reachable from the Docker network (Caddy), not the host directly
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
-  nginx:
-    image: nginx:alpine
+  caddy:
+    image: caddy:2
     restart: unless-stopped
     depends_on:
       - frontend
       - backend
     ports:
       - "80:80"
-      - "443:443"
+      - "443:443"   # ready for when you add a real domain (HTTPS auto-cert)
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/certs:/etc/nginx/certs:ro
-      - ./nginx/entrypoint.sh:/entrypoint.sh:ro
-    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
 
   watchtower:
     image: containrrr/watchtower
@@ -53,3 +52,7 @@ services:
       WATCHTOWER_CLEANUP: "true"
       WATCHTOWER_POLL_INTERVAL: "120"
     command: --label-enable --cleanup
+
+volumes:
+  caddy_data:
+  caddy_config:

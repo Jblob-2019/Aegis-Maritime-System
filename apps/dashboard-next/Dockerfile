@@ -20,31 +20,28 @@ RUN npm run build
 FROM node:22-alpine AS runtime
 WORKDIR /app
 
-# Tools needed for IP detection (ip route, hostname -I)
-RUN apk add --no-cache iproute2 curl
+# No extra packages needed – Caddy handles reverse-proxying and the
+# browser uses same-origin requests, so no IP detection is required.
+# inject-env.sh is kept as a no-op for backward compatibility.
 
 # Copy the built "standalone" output from the builder
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
 
-# Add the env-injection script
+# Add the env-injection script (no-op)
 COPY inject-env.sh /usr/local/bin/inject-env.sh
 RUN chmod +x /usr/local/bin/inject-env.sh
 
 # Production environment
 ENV NODE_ENV=production
 ENV PORT=3000
-# Default backend port the inject-env.sh script will use if BACKEND_PORT
-# is not set via docker-compose.yml. Keep this in sync with the backend.
-ENV BACKEND_PORT=4000
 EXPOSE 3000
 
 # Run as non-root for defense-in-depth
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
-# Give the non-root user ownership of the app directory (including /app/public)
-# so inject-env.sh can write /app/public/env.js at container start.
+# Give the non-root user ownership of the app directory.
 RUN chown -R appuser:appgroup /app
 
 USER appuser
