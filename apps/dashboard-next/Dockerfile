@@ -1,7 +1,8 @@
 # Dockerfile for the AEGIS Next.js dashboard (apps/dashboard-next)
-# Multi-stage build that produces a lightweight, production-ready image
-# and automatically detects the host IP at runtime so the browser
-# always connects to the backend on the correct address.
+# Multi-stage build that produces a lightweight, production-ready image.
+# At runtime, inject-env.sh detects the host's LAN IP and writes
+# /app/public/env.js so the browser can reach the backend at the
+# correct address automatically.
 # ------------------------------------------------------------
 # 1️⃣ Build stage – install ALL deps (devDependencies are needed for the build)
 #    and compile the Next.js app.
@@ -16,32 +17,36 @@ COPY . .
 RUN npm run build
 
 # ------------------------------------------------------------
-# 2️⃣ Runtime stage – copy only the built output + auto-detect IP
+# 2️⃣ Runtime stage – copy only the built output.
 FROM node:22-alpine AS runtime
 WORKDIR /app
 
-# No extra packages needed – Caddy handles reverse-proxying and the
-# browser uses same-origin requests, so no IP detection is required.
-# inject-env.sh is kept as a no-op for backward compatibility.
+# Tools needed by inject-env.sh (ip route for LAN IP detection,
+# curl as a fallback to api.ipify.org).
+RUN apk add --no-cache iproute2 curl
 
 # Copy the built "standalone" output from the builder
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
 
-# Add the env-injection script (no-op)
+# Add the env-injection script
 COPY inject-env.sh /usr/local/bin/inject-env.sh
 RUN chmod +x /usr/local/bin/inject-env.sh
 
 # Production environment
 ENV NODE_ENV=production
 ENV PORT=3000
+# Default backend port the inject-env.sh script will use if BACKEND_PORT
+# is not set via docker-compose.yml. Keep this in sync with the backend.
+ENV BACKEND_PORT=4000
 EXPOSE 3000
 
 # Run as non-root for defense-in-depth
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
-# Give the non-root user ownership of the app directory.
+# Give the non-root user ownership of the app directory (including /app/public)
+# so inject-env.sh can write /app/public/env.js at container start.
 RUN chown -R appuser:appgroup /app
 
 USER appuser
