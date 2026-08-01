@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SkyLayer — Weather Maps</title>
+<style>
+  * { box-sizing:border-box; }
+  html,body { margin:0; padding:0; overflow:hidden; background:#0a0e1a; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; user-select:none; }
+  #wrap { position:relative; width:100vw; height:100vh; cursor:grab; }
+  #wrap.dragging { cursor:grabbing; }
+  canvas { position:absolute; top:0; left:0; }
+  #ui { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; }
+
+  /* ---------- sidebar ---------- */
+  #sidebar { position:absolute; top:16px; left:16px; width:210px; background:rgba(15,19,32,.86); border:1px solid rgba(255,255,255,.1); border-radius:12px; backdrop-filter:blur(10px); pointer-events:auto; overflow:hidden; }
+  .brand { display:flex; align-items:center; gap:9px; padding:12px 14px; border-bottom:1px solid rgba(255,255,255,.08); }
+  .brand .mark { width:26px; height:26px; border-radius:50%; background:conic-gradient(from 200deg,#3fd0e0,#4a7cf0,#3fd0e0); position:relative; }
+  .brand .mark::after { content:''; position:absolute; inset:6px; background:#0f1320; border-radius:50%; }
+  .brand .name { font-size:13px; font-weight:800; letter-spacing:.06em; color:#eef2f8; line-height:1.15; }
+  .menu-head { display:flex; justify-content:space-between; align-items:center; padding:9px 14px; font-size:10.5px; font-weight:700; letter-spacing:.09em; color:#8a96ad; }
+  .item { display:flex; align-items:center; gap:10px; padding:8px 14px; font-size:13px; color:#dbe2ee; cursor:pointer; }
+  .item .ic { width:16px; text-align:center; opacity:.85; font-size:13px; }
+  .item:hover:not(.disabled) { background:rgba(255,255,255,.06); }
+  .item.active { background:#2d3d55; color:#fff; }
+  .item.disabled { color:#57607a; cursor:not-allowed; }
+  .sub { padding:2px 14px 8px 40px; display:none; flex-direction:column; gap:5px; }
+  .sub.open { display:flex; }
+  .sub-item { font-size:12px; color:#8a96ad; cursor:pointer; display:flex; align-items:center; gap:6px; }
+  .sub-item::before { content:''; width:11px; height:11px; border-radius:3px; border:1.5px solid #5a6478; }
+  .sub-item.active { color:#eef2f8; }
+  .sub-item.active::before { content:'✓'; font-size:9px; line-height:9px; text-align:center; background:#3fa9f5; border-color:#3fa9f5; color:#0f1320; }
+
+  /* ---------- legends ---------- */
+  .legend { position:absolute; left:16px; bottom:16px; background:rgba(10,14,26,.75); border:1px solid rgba(255,255,255,.12); border-radius:10px; padding:11px 15px; color:#dfe6f0; font-size:11px; backdrop-filter:blur(8px); pointer-events:auto; display:none; }
+  .legend.show { display:block; }
+  .legend .title { font-weight:600; margin-bottom:7px; color:#f2f5fa; }
+  .legend .bar { width:230px; height:9px; border-radius:5px; margin:6px 0; }
+  .legend .ticks { display:flex; justify-content:space-between; font-size:9px; color:#93a0b6; }
+
+  /* ---------- hud / zoom ---------- */
+  #hud { position:absolute; top:16px; right:16px; background:rgba(10,14,26,.72); border:1px solid rgba(255,255,255,.12); border-radius:10px; padding:9px 14px; color:#dfe6f0; font-size:12px; backdrop-filter:blur(8px); pointer-events:auto; }
+  #hud b { color:#fff; }
+  .zbtns { position:absolute; right:16px; bottom:64px; display:flex; flex-direction:column; gap:6px; pointer-events:auto; }
+  .zbtns button { width:34px; height:34px; border-radius:9px; border:1px solid rgba(255,255,255,.15); background:rgba(10,14,26,.72); color:#fff; font-size:17px; cursor:pointer; backdrop-filter:blur(8px); }
+  .zbtns button:hover { background:rgba(255,255,255,.16); }
+
+  /* ---------- markers ---------- */
+  .marker { position:absolute; transform:translate(-50%,-100%); display:flex; flex-direction:column; align-items:center; }
+  .marker .name { font-size:11px; font-weight:600; color:#eef2f8; text-shadow:0 1px 4px rgba(0,0,0,.9); margin-bottom:4px; white-space:nowrap; }
+  .badge { display:flex; align-items:center; gap:3px; background:rgba(14,19,34,.82); border:1px solid rgba(255,255,255,.16); border-radius:12px; padding:2px 7px; font-weight:700; font-size:11px; color:#f4f7fb; }
+  .arrow { display:inline-block; font-size:11px; line-height:1; transition:transform .4s ease; }
+
+  /* ---------- timeline ---------- */
+  #timeline { position:absolute; left:50%; bottom:16px; transform:translateX(-50%); display:flex; align-items:center; gap:10px; background:rgba(10,14,26,.8); border:1px solid rgba(255,255,255,.12); border-radius:12px; padding:9px 14px; color:#eef2f8; font-size:13px; backdrop-filter:blur(8px); pointer-events:auto; }
+  #timeline button.playbtn { width:28px; height:28px; border-radius:50%; border:none; background:#2d3d55; color:#fff; cursor:pointer; font-size:12px; }
+  .stepper { display:flex; align-items:center; gap:3px; }
+  .stepper .updown { display:flex; flex-direction:column; }
+  .stepper .updown button { width:14px; height:11px; border:none; background:transparent; color:#7c88a0; cursor:pointer; font-size:8px; line-height:1; padding:0; }
+  .stepper .updown button:hover { color:#fff; }
+
+  /* ---------- footer info ---------- */
+  #coords { position:absolute; left:16px; bottom:0; padding:6px 10px; color:#8a96ad; font-size:10.5px; pointer-events:none; }
+  #footer-right { position:absolute; right:16px; bottom:16px; display:flex; align-items:center; gap:10px; pointer-events:none; }
+  .scalebar { display:flex; flex-direction:column; align-items:flex-end; color:#c9d1e0; font-size:10px; }
+  .scalebar .track { height:3px; background:#c9d1e0; margin-top:3px; }
+  #source { position:absolute; left:50%; bottom:0; transform:translateX(-50%); color:#5a6478; font-size:10px; pointer-events:none; }
+
+  /* ---------- top-right chrome ---------- */
+  #chrome { position:absolute; top:16px; right:16px; display:flex; flex-direction:column; gap:6px; pointer-events:auto; }
+  #chrome button { width:36px; height:36px; border-radius:50%; border:1px solid rgba(255,255,255,.12); background:rgba(15,19,32,.82); color:#c9d1e0; cursor:pointer; font-size:14px; backdrop-filter:blur(8px); }
+  #chrome button:hover { background:rgba(255,255,255,.12); color:#fff; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="field"></canvas>
+  <canvas id="particles"></canvas>
+  <canvas id="contours"></canvas>
+  <div id="ui"></div>
+
+  <div id="sidebar">
+    <div class="brand"><div class="mark"></div><div class="name">SKY<br>LAYER</div></div>
+    <div class="menu-head">WEATHER MAPS <span>⌃</span></div>
+    <div class="item disabled"><span class="ic">🛰</span>Satellite</div>
+    <div class="item disabled"><span class="ic">📡</span>Radar</div>
+    <div class="item disabled"><span class="ic">🌧</span>Precipitation</div>
+
+    <div class="item" data-layer="wind"><span class="ic">〰</span>Wind</div>
+    <div class="sub" data-for="wind">
+      <div class="sub-item active" data-layer="wind" data-opt="speed">Wind Speed</div>
+      <div class="sub-item" data-layer="wind" data-opt="gusts">Wind Gusts</div>
+    </div>
+
+    <div class="item" data-layer="temperature"><span class="ic">🌡</span>Temperature</div>
+    <div class="sub" data-for="temperature">
+      <div class="sub-item active" data-layer="temperature" data-opt="actual">Actual</div>
+      <div class="sub-item" data-layer="temperature" data-opt="feels">Feels Like</div>
+    </div>
+
+    <div class="item" data-layer="humidity"><span class="ic">💧</span>Humidity</div>
+    <div class="sub" data-for="humidity">
+      <div class="sub-item active" data-layer="humidity" data-opt="relative">Relative</div>
+      <div class="sub-item" data-layer="humidity" data-opt="dew">Dew Point</div>
+      <div class="sub-item" data-layer="humidity" data-opt="wetbulb">Wet Bulb</div>
+    </div>
+
+    <div class="item" data-layer="pressure"><span class="ic">◌</span>Pressure</div>
+  </div>
+
+  <div id="legendWind" class="legend">
+    <div class="title">Wind (Bft)</div>
+    <div class="bar" style="background:linear-gradient(to right, rgb(35,70,170) 0%, rgb(35,150,185) 25%, rgb(70,185,120) 41.7%, rgb(190,215,80) 58.3%, rgb(230,180,60) 75%, rgb(230,120,50) 83.3%, rgb(210,70,50) 91.7%, rgb(150,30,40) 100%);"></div>
+    <div class="ticks"><span>0</span><span>3</span><span>5</span><span>7</span><span>9</span><span>10</span><span>11</span><span>12</span></div>
+  </div>
+  <div id="legendTemperature" class="legend">
+    <div class="title">Temperature (°C)</div>
+    <div class="bar" style="background:linear-gradient(to right, rgb(90,40,150) 0%, rgb(40,80,190) 25%, rgb(50,170,190) 37.5%, rgb(110,190,110) 50%, rgb(230,210,80) 62.5%, rgb(230,150,60) 75%, rgb(200,70,50) 87.5%, rgb(120,20,20) 100%);"></div>
+    <div class="ticks"><span>-30</span><span>-10</span><span>0</span><span>10</span><span>20</span><span>30</span><span>40</span><span>50</span></div>
+  </div>
+  <div id="legendHumidity" class="legend">
+    <div class="title">Humidity (%)</div>
+    <div class="bar" style="background:linear-gradient(to right, rgb(140,90,40) 0%, rgb(210,150,70) 25%, rgb(220,210,140) 50%, rgb(80,170,180) 75%, rgb(30,80,150) 100%);"></div>
+    <div class="ticks"><span>0</span><span>25</span><span>50</span><span>75</span><span>100</span></div>
+  </div>
+  <div id="legendPressure" class="legend">
+    <div class="title">Pressure (hPa)</div>
+    <div class="bar" style="background:linear-gradient(to right, rgb(40,60,150) 0%, rgb(70,110,190) 20%, rgb(140,180,210) 40%, rgb(225,220,200) 60%, rgb(220,150,90) 80%, rgb(190,70,50) 100%);"></div>
+    <div class="ticks"><span>970</span><span>985</span><span>1000</span><span>1015</span><span>1030</span><span>1045</span></div>
+  </div>
+
+  <div id="hud">Zoom <b id="zoomVal">1.0×</b></div>
+  <div class="zbtns"><button id="zin">+</button><button id="zout">−</button><button id="zreset">⤾</button></div>
+  <div id="chrome">
+    <button title="search">⌕</button>
+    <button title="settings">⚙</button>
+    <button title="info">ⓘ</button>
+    <button title="share">⇱</button>
+    <button id="locate" title="reset view">⦿</button>
+  </div>
+
+  <div id="timeline">
+    <button class="playbtn" id="play">▶</button>
+    <span id="dtDate">1 Aug</span>
+    <div class="stepper"><span id="dtHour">15</span><div class="updown"><button data-f="hour" data-d="1">▲</button><button data-f="hour" data-d="-1">▼</button></div></div>
+    <span>:</span>
+    <div class="stepper"><span id="dtMin">36</span><div class="updown"><button data-f="min" data-d="5">▲</button><button data-f="min" data-d="-5">▼</button></div></div>
+    <button class="playbtn" id="skip">⏭</button>
+  </div>
+
+  <div id="coords">— , —</div>
+  <div id="source">Synthetic demo field · not live weather data</div>
+  <div id="footer-right">
+    <div class="scalebar"><span id="scaleLabel">500 km</span><div class="track" id="scaleTrack" style="width:100px;"></div></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const wrap = document.getElementById('wrap');
+  const fieldCv = document.getElementById('field');
+  const partCv = document.getElementById('particles');
+  const contCv = document.getElementById('contours');
+  const fctx = fieldCv.getContext('2d');
+  const pctx = partCv.getContext('2d');
+  const cctx = contCv.getContext('2d');
+  const ui = document.getElementById('ui');
+  const zoomVal = document.getElementById('zoomVal');
+  const DPR = Math.min(window.devicePixelRatio || 1, 2);
+
+  // ---------- noise ----------
+  function hash(x,y){ const n = Math.sin(x*127.1 + y*311.7) * 43758.5453123; return n - Math.floor(n); }
+  function smooth(t){ return t*t*(3-2*t); }
+  function noise2(x,y){
+    const xi=Math.floor(x), yi=Math.floor(y), xf=x-xi, yf=y-yi;
+    const a=hash(xi,yi), b=hash(xi+1,yi), c=hash(xi,yi+1), d=hash(xi+1,yi+1);
+    const u=smooth(xf), v=smooth(yf);
+    return a+(b-a)*u+(c-a)*v+(a-b-c+d)*u*v;
+  }
+  function fbm(x,y,oct){
+    oct = oct||4; let val=0, amp=0.5, freq=1;
+    for(let i=0;i<oct;i++){ val+=amp*noise2(x*freq,y*freq); freq*=2; amp*=0.5; }
+    return val;
+  }
+
+  // ---------- geography (world units in degrees * DEG_SCALE) ----------
+  const DEG_SCALE = 18, LAT0 = 15, LON0 = 75;
+  function worldToLatLon(wx,wy){ return { lat: LAT0 - wy/DEG_SCALE, lon: wx/DEG_SCALE + LON0 }; }
+  function latLonToWorld(lat,lon){ return { wx: (lon-LON0)*DEG_SCALE, wy: (LAT0-lat)*DEG_SCALE }; }
+
+  // ---------- layer field generators (raw physical value at lon/lat/time) ----------
+  function windSample(lon,lat,t){
+    const nx=lon*0.05, ny=lat*0.05;
+    const wxp=fbm(nx+t*0.02, ny-t*0.015,3);
+    const wyp=fbm(nx-4.7, ny+t*0.02,3);
+    const angle=fbm(nx+wxp*1.6, ny+wyp*1.6,4)*Math.PI*4.2;
+    const raw=fbm(nx*1.3+91.3, ny*1.3+91.3,4);
+    let knots=Math.max(0,(raw+0.5))*30;
+    if(state.opts.wind==='gusts') knots*=1.35;
+    return { knots, angle, value: knotsToBft(knots) };
+  }
+  function knotsToBft(k){
+    const table=[1,3,6,10,16,21,27,33,40,47,55,63];
+    for(let i=0;i<table.length;i++) if(k<table[i]) return i;
+    return 12;
+  }
+  function tempSample(lon,lat,t){
+    const nx=lon*0.04, ny=lat*0.04;
+    const n = fbm(nx+t*0.01, ny+t*0.008,4);
+    const latF = 1 - Math.min(1, Math.abs(lat)/62);
+    let val = 32*latF + n*16 - 2;
+    if(state.opts.temperature==='feels'){
+      const h = humSample(lon,lat,t,true);
+      val += (h/100)*4 - 1;
+    }
+    return { value: val };
+  }
+  function humSample(lon,lat,t,raw){
+    const nx=lon*0.045, ny=lat*0.045;
+    const v = fbm(nx+50+t*0.012, ny-50+t*0.01,4);
+    let pct = Math.max(0,Math.min(100,(v*0.5+0.5)*110-5));
+    if(raw) return pct;
+    if(state.opts.humidity==='dew' || state.opts.humidity==='wetbulb'){
+      const temp = tempSample(lon,lat,t).value;
+      const div = state.opts.humidity==='dew' ? 5 : 6.5;
+      return { value: temp - ((100-pct)/div) };
+    }
+    return { value: pct };
+  }
+  function pressSample(lon,lat,t){
+    const nx=lon*0.035, ny=lat*0.035;
+    const v = fbm(nx+200+t*0.008, ny+200+t*0.008,4);
+    return { value: 1013 + v*36 };
+  }
+
+  const LAYERS = {
+    wind:        { sample: windSample,  stops:[[0,[35,70,170]],[3,[35,150,185]],[5,[70,185,120]],[7,[190,215,80]],[9,[230,180,60]],[10,[230,120,50]],[11,[210,70,50]],[12,[150,30,40]]], min:0, max:12 },
+    temperature: { sample: tempSample,  stops:[[-30,[90,40,150]],[-10,[40,80,190]],[0,[50,170,190]],[10,[110,190,110]],[20,[230,210,80]],[30,[230,150,60]],[40,[200,70,50]],[50,[120,20,20]]], min:-30, max:50 },
+    humidity:    { sample: humSample,   stops:[[0,[140,90,40]],[25,[210,150,70]],[50,[220,210,140]],[75,[80,170,180]],[100,[30,80,150]]], min:0, max:100 },
+    pressure:    { sample: pressSample, stops:[[970,[40,60,150]],[985,[70,110,190]],[1000,[140,180,210]],[1015,[225,220,200]],[1030,[220,150,90]],[1045,[190,70,50]]], min:970, max:1045 }
+  };
+
+  function colorForValue(value, stops){
+    if(value<=stops[0][0]) return stops[0][1];
+    for(let i=0;i<stops.length-1;i++){
+      const [v0,c0]=stops[i], [v1,c1]=stops[i+1];
+      if(value>=v0 && value<=v1){
+        const f=(value-v0)/(v1-v0);
+        return [Math.round(c0[0]+(c1[0]-c0[0])*f), Math.round(c0[1]+(c1[1]-c0[1])*f), Math.round(c0[2]+(c1[2]-c0[2])*f)];
+      }
+    }
+    return stops[stops.length-1][1];
+  }
+
+  // ---------- app state ----------
+  const state = { layer:'wind', opts:{ wind:'speed', temperature:'actual', humidity:'relative' }, playing:true };
+
+  // ---------- view transform ----------
+  const view = { scale:1, x:0, y:0 };
+  function screenToWorld(sx,sy){ return { x:(sx-view.x)/view.scale, y:(sy-view.y)/view.scale }; }
+  function worldToScreen(wx,wy){ return { x:wx*view.scale+view.x, y:wy*view.scale+view.y }; }
+
+  let W=0,H=0;
+  function resize(){
+    W=window.innerWidth; H=window.innerHeight;
+    [fieldCv,partCv,contCv].forEach(cv=>{ cv.width=W*DPR; cv.height=H*DPR; cv.style.width=W+'px'; cv.style.height=H+'px'; });
+    fctx.setTransform(DPR,0,0,DPR,0,0);
+    pctx.setTransform(DPR,0,0,DPR,0,0);
+    cctx.setTransform(DPR,0,0,DPR,0,0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+  view.x = W/2; view.y = H/2;
+
+  // ---------- background field ----------
+  const CELL = 9;
+  const bgCanvas = document.createElement('canvas');
+  const bgCtx = bgCanvas.getContext('2d');
+  let lastGrid=null, lastCols=0, lastRows=0;
+
+  function drawField(t){
+    const layer = LAYERS[state.layer];
+    const cols = Math.ceil(W/CELL)+1, rows = Math.ceil(H/CELL)+1;
+    bgCanvas.width=cols; bgCanvas.height=rows;
+    const img = bgCtx.createImageData(cols,rows);
+    const grid = new Float32Array(cols*rows);
+    for(let j=0;j<rows;j++){
+      for(let i=0;i<cols;i++){
+        const sx=i*CELL, sy=j*CELL;
+        const w = screenToWorld(sx,sy);
+        const ll = worldToLatLon(w.x,w.y);
+        const s = layer.sample(ll.lon, ll.lat, t);
+        grid[j*cols+i] = s.value;
+        const col = colorForValue(s.value, layer.stops);
+        const idx=(j*cols+i)*4;
+        img.data[idx]=col[0]; img.data[idx+1]=col[1]; img.data[idx+2]=col[2]; img.data[idx+3]=255;
+      }
+    }
+    bgCtx.putImageData(img,0,0);
+    fctx.save();
+    fctx.setTransform(1,0,0,1,0,0);
+    fctx.imageSmoothingEnabled = true;
+    fctx.filter = 'blur(6px)';
+    fctx.drawImage(bgCanvas, -CELL, -CELL);
+    fctx.filter = 'none';
+    fctx.restore();
+    lastGrid=grid; lastCols=cols; lastRows=rows;
+
+    if(state.layer==='pressure') drawContours(grid, cols, rows); else cctx.clearRect(0,0,W,H);
+  }
+
+  // ---------- marching squares contours (pressure isobars) ----------
+  function drawContours(grid, cols, rows){
+    cctx.save();
+    cctx.setTransform(DPR,0,0,DPR,0,0);
+    cctx.clearRect(0,0,W,H);
+    cctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    cctx.lineWidth = 1;
+    const levels = [975,985,995,1005,1015,1025,1035,1045];
+    function val(i,j){ return grid[j*cols+i]; }
+    function lerp(v0,v1,level){ return v1===v0 ? 0.5 : (level-v0)/(v1-v0); }
+    for(const level of levels){
+      cctx.beginPath();
+      for(let j=0;j<rows-1;j++){
+        for(let i=0;i<cols-1;i++){
+          const tl=val(i,j), tr=val(i+1,j), br=val(i+1,j+1), bl=val(i,j+1);
+          let idx=0;
+          if(tl>level) idx|=8; if(tr>level) idx|=4; if(br>level) idx|=2; if(bl>level) idx|=1;
+          if(idx===0||idx===15) continue;
+          const x0=i*CELL-CELL, y0=j*CELL-CELL, x1=(i+1)*CELL-CELL, y1=(j+1)*CELL-CELL;
+          const top=[x0+lerp(tl,tr,level)*(x1-x0), y0];
+          const right=[x1, y0+lerp(tr,br,level)*(y1-y0)];
+          const bottom=[x0+lerp(bl,br,level)*(x1-x0), y1];
+          const left=[x0, y0+lerp(tl,bl,level)*(y1-y0)];
+          const table={1:[[left,bottom]],2:[[bottom,right]],3:[[left,right]],4:[[top,right]],
+            5:[[top,left],[bottom,right]],6:[[top,bottom]],7:[[top,left]],8:[[top,left]],
+            9:[[top,bottom]],10:[[top,right],[bottom,left]],11:[[top,right]],12:[[left,right]],
+            13:[[bottom,right]],14:[[left,bottom]]};
+          const lines = table[idx];
+          if(lines) for(const [a,b] of lines){ cctx.moveTo(a[0],a[1]); cctx.lineTo(b[0],b[1]); }
+        }
+      }
+      cctx.stroke();
+    }
+    cctx.restore();
+  }
+
+  // ---------- particles (wind only) ----------
+  const N = 800;
+  let particles = [];
+  function visibleWorldBounds(margin){
+    const p0=screenToWorld(-margin,-margin), p1=screenToWorld(W+margin,H+margin);
+    return { x0:p0.x, y0:p0.y, x1:p1.x, y1:p1.y };
+  }
+  function spawn(p){
+    const b = visibleWorldBounds(40);
+    p.wx = b.x0+Math.random()*(b.x1-b.x0);
+    p.wy = b.y0+Math.random()*(b.y1-b.y0);
+    p.age=0; p.life=1.2+Math.random()*1.8; p.hasPrev=false;
+  }
+  function initParticles(){ particles=[]; for(let i=0;i<N;i++){ const p={}; spawn(p); p.age=Math.random()*p.life; particles.push(p); } }
+  initParticles();
+
+  const K = 1.9;
+  function stepParticles(dt,t){
+    pctx.save(); pctx.setTransform(DPR,0,0,DPR,0,0);
+    pctx.globalCompositeOperation='destination-out';
+    pctx.fillStyle='rgba(0,0,0,0.14)';
+    pctx.fillRect(0,0,W,H);
+    pctx.globalCompositeOperation='source-over';
+    const b = visibleWorldBounds(60);
+    for(const p of particles){
+      const ll = worldToLatLon(p.wx,p.wy);
+      const f = windSample(ll.lon, ll.lat, t);
+      const prev = worldToScreen(p.wx,p.wy);
+      p.wx += Math.cos(f.angle)*f.knots*K*dt;
+      p.wy += Math.sin(f.angle)*f.knots*K*dt;
+      p.age += dt;
+      const cur = worldToScreen(p.wx,p.wy);
+      if(p.hasPrev && p.age<p.life){
+        const alpha = Math.min(1,(p.life-p.age)/p.life+0.15)*0.7;
+        pctx.strokeStyle = `rgba(255,255,255,${alpha.toFixed(3)})`;
+        pctx.lineWidth = Math.max(1, 1.3*Math.sqrt(view.scale));
+        pctx.beginPath(); pctx.moveTo(prev.x,prev.y); pctx.lineTo(cur.x,cur.y); pctx.stroke();
+      }
+      p.hasPrev=true;
+      if(p.age>p.life || p.wx<b.x0 || p.wx>b.x1 || p.wy<b.y0 || p.wy>b.y1) spawn(p);
+    }
+    pctx.restore();
+  }
+
+  // ---------- markers ----------
+  const cities = [
+    ['Athens',37.98,23.73],['Cairo',30.05,31.23],['Baghdad',33.3,44.4],['Tehran',35.7,51.4],
+    ['Riyadh',24.7,46.7],['Dubai',25.2,55.3],['Muscat',23.6,58.6],['Mecca',21.4,39.8],
+    ['Aden',12.8,45.0],['Mogadishu',2.04,45.34],['New Delhi',28.6,77.2],['Mumbai',19.07,72.87],
+    ['Chennai',13.08,80.27],['Kolkata',22.57,88.36],['Colombo',6.93,79.85],['Bangkok',13.75,100.5],
+    ['Kuala Lumpur',3.14,101.7],['Jakarta',-6.2,106.8],['Manila',14.6,121.0],['Hanoi',21.03,105.85],
+    ['Nay Pyi Taw',19.75,96.1],['Shanghai',31.2,121.5],['Seoul',37.57,126.98],['Taipei',25.03,121.56],
+    ['Darwin',-12.46,130.84],['Luanda',-8.84,13.23]
+  ];
+  const markerEls = cities.map(([name,lat,lon])=>{
+    const w = latLonToWorld(lat,lon);
+    const el = document.createElement('div');
+    el.className='marker';
+    el.innerHTML = `<div class="name">${name}</div><div class="badge"><span class="num">-</span><span class="arrow">➤</span></div>`;
+    ui.appendChild(el);
+    return { lat, lon, wx:w.wx, wy:w.wy, el, num:el.querySelector('.num'), arrow:el.querySelector('.arrow') };
+  });
+  function formatValue(layerKey, s){
+    if(layerKey==='wind') return String(s.value);
+    if(layerKey==='temperature') return Math.round(s.value)+'°';
+    if(layerKey==='humidity') return Math.round(s.value)+'%';
+    if(layerKey==='pressure') return Math.round(s.value);
+    return '';
+  }
+  function updateMarkers(t){
+    const layer = LAYERS[state.layer];
+    for(const m of markerEls){
+      const pos = worldToScreen(m.wx,m.wy);
+      if(pos.x<-60||pos.x>W+60||pos.y<-60||pos.y>H+60){ m.el.style.display='none'; continue; }
+      m.el.style.display='flex';
+      m.el.style.left=pos.x+'px'; m.el.style.top=pos.y+'px';
+      const s = layer.sample(m.lon, m.lat, t);
+      m.num.textContent = formatValue(state.layer, s);
+      if(state.layer==='wind'){
+        m.arrow.style.display='inline-block';
+        m.arrow.style.transform = `rotate(${(s.angle*180/Math.PI)+90}deg)`;
+      } else {
+        m.arrow.style.display='none';
+      }
+    }
+  }
+
+  // ---------- sidebar interactions ----------
+  const legends = { wind:document.getElementById('legendWind'), temperature:document.getElementById('legendTemperature'), humidity:document.getElementById('legendHumidity'), pressure:document.getElementById('legendPressure') };
+  function setLayer(layerKey){
+    state.layer = layerKey;
+    document.querySelectorAll('.item[data-layer]').forEach(el=> el.classList.toggle('active', el.dataset.layer===layerKey));
+    document.querySelectorAll('.sub').forEach(el=> el.classList.toggle('open', el.dataset.for===layerKey));
+    Object.keys(legends).forEach(k=> legends[k].classList.toggle('show', k===layerKey));
+    if(layerKey!=='wind'){ pctx.clearRect(0,0,W,H); }
+    if(layerKey!=='pressure'){ cctx.clearRect(0,0,W,H); }
+  }
+  document.querySelectorAll('.item[data-layer]').forEach(el=>{
+    el.addEventListener('click', ()=> setLayer(el.dataset.layer));
+  });
+  document.querySelectorAll('.sub-item').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const layerKey = el.dataset.layer, opt = el.dataset.opt;
+      state.opts[layerKey] = opt;
+      document.querySelectorAll(`.sub-item[data-layer="${layerKey}"]`).forEach(s=> s.classList.toggle('active', s===el));
+    });
+  });
+  setLayer('wind');
+
+  // ---------- pan & zoom ----------
+  let dragging=false, lastX=0, lastY=0;
+  wrap.addEventListener('mousedown', e=>{ dragging=true; lastX=e.clientX; lastY=e.clientY; wrap.classList.add('dragging'); });
+  window.addEventListener('mouseup', ()=>{ dragging=false; wrap.classList.remove('dragging'); });
+  window.addEventListener('mousemove', e=>{
+    const p = screenToWorld(e.clientX,e.clientY);
+    const ll = worldToLatLon(p.x,p.y);
+    document.getElementById('coords').textContent = `${Math.abs(ll.lat).toFixed(2)}°${ll.lat>=0?'N':'S'}  ${Math.abs(ll.lon).toFixed(2)}°${ll.lon>=0?'E':'W'}`;
+    if(!dragging) return;
+    view.x += e.clientX-lastX; view.y += e.clientY-lastY;
+    lastX=e.clientX; lastY=e.clientY;
+  });
+  function zoomAt(sx,sy,factor){
+    const before = screenToWorld(sx,sy);
+    view.scale = Math.max(0.3, Math.min(24, view.scale*factor));
+    const after = worldToScreen(before.x,before.y);
+    view.x += sx-after.x; view.y += sy-after.y;
+    zoomVal.textContent = view.scale.toFixed(1)+'×';
+    updateScaleBar();
+  }
+  wrap.addEventListener('wheel', e=>{ e.preventDefault(); zoomAt(e.clientX,e.clientY, e.deltaY<0?1.1:0.9); }, {passive:false});
+
+  let touchState=null;
+  wrap.addEventListener('touchstart', e=>{
+    if(e.touches.length===1) touchState={mode:'pan', x:e.touches[0].clientX, y:e.touches[0].clientY};
+    else if(e.touches.length===2){ const [a,b]=e.touches; touchState={mode:'pinch', dist:Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY), cx:(a.clientX+b.clientX)/2, cy:(a.clientY+b.clientY)/2}; }
+  }, {passive:true});
+  wrap.addEventListener('touchmove', e=>{
+    if(!touchState) return;
+    if(touchState.mode==='pan' && e.touches.length===1){
+      const t=e.touches[0]; view.x += t.clientX-touchState.x; view.y += t.clientY-touchState.y;
+      touchState.x=t.clientX; touchState.y=t.clientY;
+    } else if(touchState.mode==='pinch' && e.touches.length===2){
+      const [a,b]=e.touches; const dist=Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY);
+      zoomAt(touchState.cx,touchState.cy, dist/touchState.dist); touchState.dist=dist;
+    }
+    e.preventDefault();
+  }, {passive:false});
+  wrap.addEventListener('touchend', ()=> touchState=null);
+
+  document.getElementById('zin').onclick = ()=> zoomAt(W/2,H/2,1.25);
+  document.getElementById('zout').onclick = ()=> zoomAt(W/2,H/2,0.8);
+  document.getElementById('zreset').onclick = document.getElementById('locate').onclick = ()=>{
+    view.scale=1; view.x=W/2; view.y=H/2; zoomVal.textContent='1.0×'; updateScaleBar();
+  };
+
+  // ---------- scale bar ----------
+  function updateScaleBar(){
+    const targetPx = 100;
+    const worldPerPx = 1/view.scale;
+    const degPerPx = worldPerPx/DEG_SCALE;
+    const kmPerPx = degPerPx * 111.32 * Math.cos(LAT0*Math.PI/180);
+    const rawKm = kmPerPx*targetPx;
+    const niceSteps=[1,2,5,10,20,50,100,200,500,1000,2000,5000];
+    let nice = niceSteps[0];
+    for(const s of niceSteps){ if(s<=rawKm) nice=s; else break; }
+    const px = nice/kmPerPx;
+    document.getElementById('scaleLabel').textContent = nice+' km';
+    document.getElementById('scaleTrack').style.width = Math.max(20,px)+'px';
+  }
+  updateScaleBar();
+
+  // ---------- timeline ----------
+  let simHour=15, simMin=36;
+  const playBtn = document.getElementById('play');
+  playBtn.onclick = ()=>{ state.playing = !state.playing; playBtn.textContent = state.playing ? '❚❚' : '▶'; };
+  document.querySelectorAll('.stepper .updown button').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const f = btn.dataset.f, d = +btn.dataset.d;
+      if(f==='hour'){ simHour=(simHour+d+24)%24; } else { simMin=(simMin+d+60)%60; }
+      document.getElementById('dtHour').textContent = String(simHour).padStart(2,'0');
+      document.getElementById('dtMin').textContent = String(simMin).padStart(2,'0');
+      time += d*0.4;
+    });
+  });
+  document.getElementById('skip').onclick = ()=>{ simHour=(simHour+1)%24; document.getElementById('dtHour').textContent=String(simHour).padStart(2,'0'); time+=2; };
+
+  // ---------- main loop ----------
+  let time=0, last=performance.now(), bgFrame=0, clockAcc=0;
+  function loop(now){
+    const dt = Math.min(0.05,(now-last)/1000); last=now;
+    if(state.playing){
+      time += dt;
+      clockAcc += dt;
+      if(clockAcc>0.6){ clockAcc=0; simMin=(simMin+1)%60; if(simMin===0) simHour=(simHour+1)%24;
+        document.getElementById('dtHour').textContent=String(simHour).padStart(2,'0');
+        document.getElementById('dtMin').textContent=String(simMin).padStart(2,'0'); }
+    }
+    bgFrame++;
+    if(bgFrame%2===0) drawField(time);
+    if(state.layer==='wind') stepParticles(dt,time);
+    updateMarkers(time);
+    requestAnimationFrame(loop);
+  }
+  document.getElementById('dtHour').textContent=String(simHour).padStart(2,'0');
+  document.getElementById('dtMin').textContent=String(simMin).padStart(2,'0');
+  drawField(time);
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

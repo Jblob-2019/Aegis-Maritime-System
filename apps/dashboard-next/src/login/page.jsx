@@ -59,53 +59,59 @@ export default function LoginPage() {
 
   return (
     <div
-      className="min-h-screen bg-gray-900 flex items-center justify-center p-4"
-      style={{
-        backgroundImage:
-          'radial-gradient(circle at center, #1f2937 0%, #111827 100%)',
-      }}
+      className="min-h-screen flex items-center justify-center p-4 bg-[#020817] relative overflow-hidden"
     >
+      {/* Background styling elements to match dashboard */}
+      <div className="absolute top-0 left-0 w-full h-full pointer-events-none" style={{ backgroundImage: 'radial-gradient(circle at 50% 30%, rgba(0,218,243,0.05) 0%, transparent 60%)' }} />
+      <div className="absolute w-[1px] h-full bg-[rgba(59,73,76,0.2)] left-1/4 pointer-events-none" />
+      <div className="absolute w-[1px] h-full bg-[rgba(59,73,76,0.2)] right-1/4 pointer-events-none" />
+      <div className="absolute h-[1px] w-full bg-[rgba(59,73,76,0.2)] top-1/4 pointer-events-none" />
+      <div className="absolute h-[1px] w-full bg-[rgba(59,73,76,0.2)] bottom-1/4 pointer-events-none" />
+
       {/* Glassmorphism Card */}
-      <div className="max-w-md w-full bg-white/10 backdrop-blur-md border border-white/20 rounded-xl shadow-2xl p-8">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-white tracking-wider font-mono">
-            AEGIS SYSTEM
-          </h1>
-          <p className="text-cyan-400 text-sm mt-2 font-mono">
+      <div className="max-w-md w-full bg-[rgba(10,15,20,0.85)] backdrop-blur-xl border border-[rgba(59,73,76,0.6)] rounded-2xl shadow-[0_15px_50px_rgba(0,0,0,0.6)] p-10 relative z-10 animate-fade-in">
+        <div className="text-center mb-10">
+          <div className="flex justify-center items-center gap-3 mb-4">
+            <span className="w-2.5 h-2.5 bg-[#00ff95] rounded-full animate-pulse shadow-[0_0_12px_rgba(0,255,149,0.8)]" />
+            <h1 className="text-[26px] font-bold text-[#c3f5ff] tracking-[0.1em]" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
+              AEGIS COMMAND
+            </h1>
+          </div>
+          <p className="text-[#8a96ad] text-[11px] font-bold tracking-widest border-b border-[rgba(59,73,76,0.3)] pb-4">
             MARITIME BOUNDARY DEFENSE
           </p>
         </div>
 
         {error && (
-          <div className="bg-red-500/20 border border-red-500 text-red-400 p-3 rounded mb-4 text-center font-mono text-sm">
+          <div className="bg-[rgba(239,68,68,0.1)] border border-[rgba(239,68,68,0.4)] text-[#ef4444] p-3 rounded-lg mb-6 text-center text-[11px] font-bold tracking-wider">
             {error}
           </div>
         )}
 
         <form onSubmit={handleLogin} className="space-y-6">
           <div>
-            <label className="block text-gray-300 text-sm font-bold mb-2 font-mono">
+            <label className="block text-[#8a96ad] text-[10px] font-bold mb-2 tracking-widest">
               OPERATOR ID
             </label>
             <input
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="w-full bg-gray-800/50 border border-gray-600 text-white rounded px-4 py-3 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-colors"
+              className="w-full bg-[rgba(0,0,0,0.3)] border border-[rgba(59,73,76,0.5)] text-[#dce4e5] text-sm rounded-lg px-4 py-3 focus:outline-none focus:border-[#00daf3] focus:shadow-[0_0_15px_rgba(0,218,243,0.2)] transition-all font-mono"
               placeholder="Enter ID..."
               required
             />
           </div>
 
           <div>
-            <label className="block text-gray-300 text-sm font-bold mb-2 font-mono">
+            <label className="block text-[#8a96ad] text-[10px] font-bold mb-2 tracking-widest">
               PASSCODE
             </label>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full bg-gray-800/50 border border-gray-600 text-white rounded px-4 py-3 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-colors"
+              className="w-full bg-[rgba(0,0,0,0.3)] border border-[rgba(59,73,76,0.5)] text-[#dce4e5] text-sm rounded-lg px-4 py-3 focus:outline-none focus:border-[#00daf3] focus:shadow-[0_0_15px_rgba(0,218,243,0.2)] transition-all font-mono"
               placeholder="••••••••"
               required
             />
@@ -113,7 +119,7 @@ export default function LoginPage() {
 
           <button
             type="submit"
-            className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-3 px-4 rounded transition-colors duration-200 font-mono tracking-widest mt-4"
+            className="w-full bg-[rgba(0,218,243,0.1)] hover:bg-[rgba(0,218,243,0.2)] border border-[#00daf3] text-[#00daf3] font-bold py-3.5 px-4 rounded-lg transition-all duration-200 tracking-widest text-[12px] mt-8 hover:shadow-[0_0_20px_rgba(0,218,243,0.3)]"
           >
             INITIALIZE UPLINK
           </button>
