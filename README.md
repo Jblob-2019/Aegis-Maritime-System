@@ -100,3 +100,20 @@ once the Docker deployment is live.
 - *What if I want a different dashboard?* Update `docker-compose.yml` to point at your alternate Next.js project. The same workflow still works.
 
 Enjoy a zero‑touch, production‑ready deployment!
+
+---
+
+## LAN Deploy (Ubuntu server)
+
+For a single-host LAN deploy (the typical Aegis setup — an Ubuntu box with a Wi-Fi/Ethernet NIC serving phones and laptops on the same network):
+
+- Both `frontend` and `backend` use `network_mode: host`, so they bind directly to the host's network interfaces. No port translation, no Docker bridge NAT.
+- `apps/dashboard-next/inject-env.sh` auto-detects the host's primary IPv4 at container start (via `hostname -I`) and bakes it into `window.__ENV__`. **No IP editing required.**
+- Override only if your server has multiple NICs and the wrong one is picked: set `HOST_LAN_IP=<lan-ip>` in `.env` before `docker compose up`.
+- CORS reflects the request `Origin` by default (`api-server.js`). For a public-internet deploy, lock it down with `ALLOWED_ORIGINS=https://your.domain,...` in `.env`.
+
+Quick check after `docker compose up -d`:
+```bash
+# Should print the server's LAN IP — phones should be able to open this URL.
+docker compose logs frontend | grep DETECTED_HOST_IP
+```
