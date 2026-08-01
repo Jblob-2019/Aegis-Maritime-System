@@ -108,14 +108,24 @@ function pointToSegmentDistance(pLat, pLng, lat1, lng1, lat2, lng2) {
 
   if (segmentLength < 0.001) return Math.min(d1, d2);
 
-  const t = Math.max(
-    0,
-    Math.min(
-      1,
-      ((pLat - lat1) * (lat2 - lat1) + (pLng - lng1) * (lng2 - lng1)) /
-        ((lat2 - lat1) * (lat2 - lat1) + (lng2 - lng1) * (lng2 - lng1))
-    )
-  );
+  const midLat = (lat1 + lat2 + pLat) / 3;
+  const cosLat = Math.cos((midLat * Math.PI) / 180);
+
+  const x = pLng * cosLat;
+  const y = pLat;
+  const x1 = lng1 * cosLat;
+  const y1 = lat1;
+  const x2 = lng2 * cosLat;
+  const y2 = lat2;
+
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+
+  let t = 0;
+  if (lenSq > 0) {
+    t = Math.max(0, Math.min(1, ((x - x1) * dx + (y - y1) * dy) / lenSq));
+  }
 
   const projLat = lat1 + t * (lat2 - lat1);
   const projLng = lng1 + t * (lng2 - lng1);
@@ -1390,6 +1400,11 @@ export default function LeafletMap({
     socket.on('connect', () => {
       setIsTracking(true);
       onStatusUpdate?.('Backend Connected');
+    });
+
+    socket.on('connect_error', () => {
+      setIsTracking(false);
+      onStatusUpdate?.('Backend Offline');
     });
 
     socket.on('disconnect', () => {

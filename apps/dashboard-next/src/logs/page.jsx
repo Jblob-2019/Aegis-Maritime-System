@@ -89,18 +89,20 @@ export default function LogsPage() {
   const [error, setError] = useState(null);
 
   const fetchData = useCallback(async () => {
-    const BACKEND =
-      getRuntimeEnv().NEXT_PUBLIC_BACKEND_URL || 'http://localhost:4000';
-    const qs = boatFilter.trim()
-      ? `?boatId=${encodeURIComponent(boatFilter.trim())}`
-      : '';
-
     setLoading(true);
     setError(null);
     try {
+      const { NEXT_PUBLIC_BACKEND_URL } = getRuntimeEnv();
+      const BACKEND = NEXT_PUBLIC_BACKEND_URL || 'http://localhost:4000';
+      const token = localStorage.getItem('token');
+      const headers = { Authorization: `Bearer ${token}` };
+
+      const qs = boatFilter.trim()
+        ? `?boatId=${encodeURIComponent(boatFilter.trim())}`
+        : '';
       const [movRes, alertRes] = await Promise.all([
-        fetch(`${BACKEND}/api/location/history${qs}`),
-        fetch(`${BACKEND}/api/alerts${qs}`),
+        fetch(`${BACKEND}/api/location/history${qs}`, { headers }),
+        fetch(`${BACKEND}/api/alerts${qs}`, { headers }),
       ]);
       if (movRes.ok) setMovements(await movRes.json());
       if (alertRes.ok) setZoneEvents(await alertRes.json());

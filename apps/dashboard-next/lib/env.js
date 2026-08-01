@@ -1,49 +1,27 @@
 // Runtime env loader.
-//
-// The frontend container's startup script (apps/dashboard-next/inject-env.sh)
-// detects the host's LAN IP and writes it to /app/public/env.js as
-// window.__ENV__. The browser reads that file at startup and uses the
-// discovered IP for every API call + Socket.IO connection.
-//
-// Why "same-origin" is NOT used here:
-//   When the frontend talks to window.location.origin, it relies on a
-//   reverse proxy (Nginx/Caddy) to forward /api/* to the backend. We
-//   don't need that proxy if we just publish the backend port on the
-//   host — the browser can hit http://<host-lan-ip>:4000 directly.
-
 export function getRuntimeEnv() {
   if (typeof window !== 'undefined' && window.__ENV__) {
     const env = window.__ENV__;
-    if (
-      env.NEXT_PUBLIC_BACKEND_URL &&
-      !env.NEXT_PUBLIC_BACKEND_URL.includes('yourdomain.com')
-    ) {
+    if (env.NEXT_PUBLIC_BACKEND_URL) {
+      if (env.NEXT_PUBLIC_BACKEND_URL.includes('yourdomain.com')) {
+        console.error('❌ CRITICAL ERROR: NEXT_PUBLIC_BACKEND_URL contains the default placeholder "yourdomain.com". The dashboard cannot connect to the backend. Please fix your .env file!');
+        throw new Error('NEXT_PUBLIC_BACKEND_URL is misconfigured with placeholder values.');
+      }
       return env;
     }
   }
 
-  const buildApi =
-    process.env.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_BACKEND_URL;
-
-  if (buildApi && !buildApi.includes('yourdomain.com')) {
-    return {
-      NEXT_PUBLIC_BACKEND_URL: buildApi,
-      NEXT_PUBLIC_API_URL: buildApi,
-      NEXT_PUBLIC_SOCKET_URL: process.env.NEXT_PUBLIC_SOCKET_URL || buildApi,
-    };
-  }
-
-  // Dynamic browser fallback: automatically connect to backend port 4000 on current hostname
-  let dynamicBackendUrl = 'http://localhost:4000';
+  // Determine origin based on the browser's current URL. 
+  // If in Vite dev (3000), requests go to 3000 and proxy to 4000.
+  // If in Prod (4000), requests go to 4000 directly.
+  let origin = '';
   if (typeof window !== 'undefined' && window.location) {
-    const protocol = window.location.protocol || 'http:';
-    const hostname = window.location.hostname || 'localhost';
-    dynamicBackendUrl = `${protocol}//${hostname}:4000`;
+    origin = window.location.origin;
   }
 
   return {
-    NEXT_PUBLIC_BACKEND_URL: dynamicBackendUrl,
-    NEXT_PUBLIC_API_URL: dynamicBackendUrl,
-    NEXT_PUBLIC_SOCKET_URL: dynamicBackendUrl,
+    NEXT_PUBLIC_BACKEND_URL: origin,
+    NEXT_PUBLIC_API_URL: origin,
+    NEXT_PUBLIC_SOCKET_URL: origin,
   };
 }

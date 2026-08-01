@@ -3,9 +3,11 @@ services:
     image: ghcr.io/pranesdev/aegis-backend:latest
     restart: unless-stopped
     environment:
+      # Note: MongoDB is not run locally; MONGO_URI connects to an external Atlas cluster.
       MONGO_URI: ${MONGO_URI}
       PORT: 4000
       JWT_SECRET: ${JWT_SECRET}
+      HARDWARE_API_KEY: ${HARDWARE_API_KEY}
     ports:
       - "4000:4000"
     labels:

@@ -146,7 +146,7 @@ jobs:
 
           echo
           echo "── frontend detected host LAN IP ──"
-          docker exec aegis-frontend cat /app/public/env.js 2>/dev/null || echo "(no env.js yet)"
+          docker exec $(docker ps -q -f "ancestor=ghcr.io/pranesdev/aegis-frontend:latest") cat /app/dist/env.js 2>/dev/null || echo "(no env.js yet)"
 
           echo
           echo "── /api/location/latest via direct backend ──"
