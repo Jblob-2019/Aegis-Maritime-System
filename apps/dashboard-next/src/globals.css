@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@600;700&family=Inter:wght@400;600&display=swap');
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
@@ -122,4 +123,45 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+@keyframes slide-in {
+  from { transform: translateX(120%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes danger-pulse {
+  0%, 100% { border-color: rgba(239, 68, 68, 0.8); }
+  50% { border-color: rgba(239, 68, 68, 0.2); }
+}
+@keyframes scan-line {
+  0% { top: 0; }
+  100% { top: 100%; }
+}
+
+@utility animate-pulse-dot { animation: pulse-dot 1.2s ease-in-out infinite; }
+@utility animate-slide-in { animation: slide-in 0.3s ease-out; }
+@utility animate-fade-in { animation: fade-in 0.2s ease-out; }
+@utility animate-danger-pulse { animation: danger-pulse 1s ease-in-out infinite; }
+@utility scan-line { animation: scan-line 3s linear infinite; }
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(195, 245, 255, 0.2);
+  border-radius: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(195, 245, 255, 0.4);
 }

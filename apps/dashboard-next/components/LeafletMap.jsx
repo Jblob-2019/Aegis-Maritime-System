@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { WindParticleLayer, GradientFieldLayer, windSample, tempSample, humSample, pressSample, tempStops, humidityStops, pressureStops, windStops, weatherGrid } from './weatherLayers';
 import { io, Socket } from 'socket.io-client';
 import * as turf from '@turf/turf';
 
@@ -437,6 +438,8 @@ export default function LeafletMap({
   onBoatsUpdate,
   selectedBoatId,
   demoMode = false,
+  weatherLayer = null,
+  realWeather = null,
 }) {
   const mapRef = useRef(null);
   const mapInstanceRef = useRef(null);
@@ -463,6 +466,8 @@ export default function LeafletMap({
     danger: null,
   });
   const trajectoryPolylineRef = useRef(null);
+  const bathymetryLayerRef = useRef(null);
+  const [showBathymetry, setShowBathymetry] = useState(true);
 
   const normalizeZone = (zone) => {
     if (zone === 'SAFE' || zone === 'WARNING' || zone === 'DANGER') return zone;
@@ -498,6 +503,7 @@ export default function LeafletMap({
   const geofenceZoneToBoatZone = (zone) => {
     if (zone === 'DANGER') return 'DANGER';
     if (zone === 'WARNING') return 'WARNING';
+    if (zone === 'ALERT') return 'ALERT';
     return 'SAFE';
   };
 
@@ -786,18 +792,20 @@ export default function LeafletMap({
     if (!mapRef.current || mapInstanceRef.current) return;
 
     // Initialize map — centred on Tamil Nadu coast
-    const map = L.map(mapRef.current, {
+    mapInstanceRef.current = L.map(mapRef.current, {
       center: [10.5, 79.5],
       zoom: 7,
-      zoomControl: true,
-      attributionControl: true,
-      minZoom: 2,
+      zoomControl: false,
+      attributionControl: false,
+      minZoom: 4.5,
       maxZoom: 18,
       worldCopyJump: true,
       scrollWheelZoom: true,
       wheelDebounceTime: 80,
       wheelPxPerZoomLevel: 120,
     });
+    const map = mapInstanceRef.current;
+    L.control.zoom({ position: 'bottomright' }).addTo(map);
 
     // Add satellite/ocean tile layer
     L.tileLayer(
@@ -806,7 +814,7 @@ export default function LeafletMap({
         attribution: 'Tiles &copy; Esri | EEZ Data &copy; Marine Regions',
         maxZoom: 19,
       }
-    ).addTo(map);
+    ).addTo(mapInstanceRef.current);
 
     // Add a labels layer with larger, clearer place names on satellite view
     L.tileLayer(
@@ -817,7 +825,19 @@ export default function LeafletMap({
         pane: 'overlayPane',
         opacity: 0.95,
       }
-    ).addTo(map);
+    ).addTo(mapInstanceRef.current);
+
+    // Add GEBCO Color Bathymetry WMS Layer
+    bathymetryLayerRef.current = L.tileLayer.wms('https://wms.gebco.net/mapserv?', {
+      layers: 'GEBCO_Latest_2',
+      format: 'image/png',
+      transparent: true,
+      opacity: 0.65,
+      attribution: '&copy; GEBCO',
+    });
+    if (showBathymetry) {
+      bathymetryLayerRef.current.addTo(mapInstanceRef.current);
+    }
 
     const renderZoneBoundaries = (
       coastlineCoords,
@@ -1523,6 +1543,112 @@ export default function LeafletMap({
     onBoatsUpdate,
   ]);
 
+  const weatherLayerInstanceRef = useRef(null);
+  const rafRef = useRef(null);
+  const weatherGridRefreshRef = useRef(null);
+
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    if (weatherLayerInstanceRef.current) {
+      const currentLayers = Array.isArray(weatherLayerInstanceRef.current) ? weatherLayerInstanceRef.current : [weatherLayerInstanceRef.current];
+      currentLayers.forEach(l => map.removeLayer(l));
+      weatherLayerInstanceRef.current = null;
+    }
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    
+    let gridTimeout = null;
+    const refreshWeather = () => {
+      clearTimeout(gridTimeout);
+      gridTimeout = setTimeout(async () => {
+        if(!mapInstanceRef.current) return;
+        await weatherGrid.refreshGrid(mapInstanceRef.current.getBounds(), 8, 6);
+        const layers = weatherLayerInstanceRef.current;
+        if(layers){
+           const arr = Array.isArray(layers) ? layers : [layers];
+           arr.forEach(l => { if(l._redraw) l._redraw(); });
+        }
+      }, 300);
+    };
+    weatherGridRefreshRef.current = refreshWeather;
+    map.on('moveend', refreshWeather);
+
+
+    if (weatherLayer) {
+      let layers = [];
+      if (weatherLayer === 'wind') {
+        layers.push(new WindParticleLayer(windSample, { particleCount: 1800, speedFactor: 1.2 }));
+      } else if (weatherLayer === 'clouds') {
+        layers.push(new GradientFieldLayer(cloudsSample, cloudsStops, { opacity: 0.65, cellSize: 4, blur: 5 }));
+      } else if (weatherLayer === 'storm') {
+        layers.push(new GradientFieldLayer(rainSample, stormStops, { opacity: 0.8, cellSize: 4, blur: 4 }));
+      } else if (weatherLayer === 'pressure') {
+        layers.push(new GradientFieldLayer(pressSample, pressureStops, {
+          contourLevels: [975, 985, 995, 1005, 1015, 1025, 1035, 1045],
+          opacity: 0.8, cellSize: 4, blur: 4
+        }));
+      }
+
+      if (layers.length > 0) {
+        weatherLayerInstanceRef.current = layers;
+        layers.forEach(l => map.addLayer(l));
+        
+        // Initial fetch
+        if (weatherGridRefreshRef.current) weatherGridRefreshRef.current();
+
+        let t = 0;
+        let last = performance.now();
+        const tick = (now) => {
+          const dt = Math.min(0.05, (now - last) / 1000);
+          last = now;
+          t += dt;
+          layers.forEach(l => {
+            if (l.setTime) l.setTime(t);
+          });
+          rafRef.current = requestAnimationFrame(tick);
+        };
+        rafRef.current = requestAnimationFrame(tick);
+      }
+    }
+
+    return () => {
+      map.off('moveend', refreshWeather);
+      if (weatherLayerInstanceRef.current) {
+        const currentLayers = Array.isArray(weatherLayerInstanceRef.current) ? weatherLayerInstanceRef.current : [weatherLayerInstanceRef.current];
+        currentLayers.forEach(l => map.removeLayer(l));
+        weatherLayerInstanceRef.current = null;
+      }
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
+  }, [weatherLayer]);
+
+  // Dedicated unmount cleanup
+  useEffect(() => {
+    return () => {
+      if (weatherLayerInstanceRef.current && mapInstanceRef.current) {
+        const currentLayers = Array.isArray(weatherLayerInstanceRef.current) ? weatherLayerInstanceRef.current : [weatherLayerInstanceRef.current];
+        currentLayers.forEach(l => mapInstanceRef.current.removeLayer(l));
+        weatherLayerInstanceRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!mapInstanceRef.current || !bathymetryLayerRef.current) return;
+    if (showBathymetry) {
+      bathymetryLayerRef.current.addTo(mapInstanceRef.current);
+    } else {
+      bathymetryLayerRef.current.remove();
+    }
+  }, [showBathymetry]);
+
   return (
     <div className="relative w-full h-full" style={{ minHeight: '520px' }}>
       <div
@@ -1531,65 +1657,60 @@ export default function LeafletMap({
         style={{ minHeight: '520px', borderRadius: '1rem' }}
       />
 
-      <div className="absolute top-4 left-4 z-[1000]">
-        <div className="hud-panel hud-status-panel flex items-center gap-3 px-4 py-3 rounded-2xl text-base font-medium">
-          <div
-            className={`hud-status-pill ${isTracking ? 'status-safe animate-pulse' : 'status-warning'}`}
-          />
-          <span className="text-sm text-slate-100">
-            {isTracking ? 'LIVE' : 'OFFLINE'}
-          </span>
-        </div>
-      </div>
-
-      <div className="absolute top-4 right-4 z-[1000]">
-        <div className="flex items-center gap-3">
-          {!followVessel && (
+      <div className="absolute bottom-[90px] right-[10px] z-[1000]">
+        <div className="flex flex-col items-center gap-2">
+          {/* RE-CENTER / FOLLOWING */}
+          {!followVessel ? (
             <button
               onClick={() => {
                 followVesselRef.current = true;
                 setFollowVessel(true);
                 if (mapInstanceRef.current && selectedBoatIdRef.current) {
-                  const selectedMarker = markerByBoatRef.current.get(
-                    selectedBoatIdRef.current
-                  );
-                  if (selectedMarker)
-                    mapInstanceRef.current.panTo(selectedMarker.getLatLng());
+                  const selectedMarker = markerByBoatRef.current.get(selectedBoatIdRef.current);
+                  if (selectedMarker) mapInstanceRef.current.panTo(selectedMarker.getLatLng());
                 }
               }}
-              className="hud-panel hud-button flex items-center gap-2 px-4 py-3 rounded-2xl text-sm font-semibold text-white transition-all"
+              className="hud-panel hud-button flex items-center justify-center w-8 h-8 rounded-xl bg-[rgba(10,14,26,0.85)] hover:bg-[rgba(20,28,31,0.95)] border border-[rgba(255,255,255,0.08)] shadow-[0_4px_20px_rgba(0,0,0,0.5)] transition-all backdrop-blur-md"
+              title="Re-center"
             >
-              <svg
-                className="w-4 h-4"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"
-                />
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
-                />
+              <svg className="w-4 h-4 text-[#c3f5ff]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
-              Re-center
+            </button>
+          ) : (
+            <button
+              onClick={() => {
+                followVesselRef.current = false;
+                setFollowVessel(false);
+              }}
+              className="hud-panel flex items-center justify-center w-8 h-8 rounded-xl bg-[rgba(10,14,26,0.85)] hover:bg-[rgba(20,28,31,0.95)] border border-[rgba(255,255,255,0.08)] shadow-[0_4px_20px_rgba(0,0,0,0.5)] transition-all backdrop-blur-md cursor-pointer"
+              title="Following Vessel (Click to unfollow)"
+            >
+              <span className="w-2.5 h-2.5 rounded-full bg-[#00ff95] shadow-[0_0_8px_#00ff95] animate-pulse" />
             </button>
           )}
-          {followVessel && (
-            <div className="hud-panel hud-status-panel flex items-center gap-2 px-4 py-3 rounded-2xl text-sm font-medium">
-              <span className="hud-status-pill status-safe animate-pulse" />
-              <span className="text-emerald-200">Following</span>
-            </div>
-          )}
-          <div className="hud-panel hud-counter px-4 py-3 rounded-2xl text-sm text-cyan-200 font-medium">
-            <span className="hud-label">Limit Count</span>
-            <div className="hud-value">{boundaryCount} zones</div>
+          
+          {/* ZONES */}
+          <div className="hud-panel flex flex-col items-center justify-center w-8 h-8 rounded-xl bg-[rgba(10,14,26,0.85)] border border-[rgba(255,255,255,0.08)] shadow-[0_4px_20px_rgba(0,0,0,0.5)] backdrop-blur-md" title="Zones">
+            <span className="text-[#c3f5ff] font-bold text-[11px] leading-none">{boundaryCount}</span>
+            <span className="text-[#8a96ad] font-bold text-[6px] leading-none uppercase mt-[1px]">Zones</span>
+          </div>
+
+          {/* BATHYMETRY TOGGLE */}
+          <button
+            onClick={() => setShowBathymetry(prev => !prev)}
+            className="hud-panel flex items-center justify-center w-8 h-8 rounded-xl bg-[rgba(10,14,26,0.85)] hover:bg-[rgba(20,28,31,0.95)] border border-[rgba(255,255,255,0.08)] shadow-[0_4px_20px_rgba(0,0,0,0.5)] transition-all backdrop-blur-md cursor-pointer"
+            title="Toggle Bathymetry"
+          >
+            <svg className={`w-4 h-4 ${showBathymetry ? 'text-[#00daf3]' : 'text-[#5a6478]'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+            </svg>
+          </button>
+
+          {/* LIVE/OFFLINE */}
+          <div className="hud-panel flex items-center justify-center w-8 h-8 rounded-xl bg-[rgba(10,14,26,0.85)] border border-[rgba(255,255,255,0.08)] shadow-[0_4px_20px_rgba(0,0,0,0.5)] backdrop-blur-md" title={isTracking ? 'Live Feed' : 'Offline'}>
+            <div className={`w-2.5 h-2.5 rounded-full ${isTracking ? 'bg-[#00daf3] shadow-[0_0_8px_#00daf3] animate-pulse' : 'bg-[#ef4444] shadow-[0_0_8px_#ef4444]'}`} />
           </div>
         </div>
       </div>

@@ -1,775 +1,320 @@
 'use client';
 
-import { useState, useCallback, useEffect, useRef } from 'react';
-import { lazy, Suspense } from 'react';
-import { TelemetryPanel } from './TelemetryPanel';
+import React, { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { io } from 'socket.io-client';
+import svgPaths from '../imports/Html→Body/svg-ojito7t2v5';
+import imgAvatar from '../imports/Html→Body/a52062035fa706d341aac18ad942fcfdb76e8eab.png';
 import { getRuntimeEnv } from '@/lib/env';
-
-const ZONE_MESSAGES = {
-  DANGER: 'CRITICAL: Turn back immediately!',
-  WARNING: 'WARNING: 12km Zone. Proceed with caution.',
-  ALERT: 'ALERT: Entered 20km Border Monitoring Zone.',
-  CLEAR: 'Deep Indian Waters. You are safe.',
-};
-
-const SAMPLE_ALERTS = [
-  {
-    zone: 'CLEAR',
-    lat: 9.8012,
-    lon: 79.3045,
-    timestamp: '2026-03-31T18:05:00.000Z',
-  },
-  {
-    zone: 'WARNING',
-    lat: 9.5534,
-    lon: 79.4412,
-    timestamp: '2026-03-31T18:11:00.000Z',
-  },
-  {
-    zone: 'DANGER',
-    lat: 9.3891,
-    lon: 79.5023,
-    timestamp: '2026-03-31T18:16:00.000Z',
-  },
-  {
-    zone: 'WARNING',
-    lat: 9.4203,
-    lon: 79.4788,
-    timestamp: '2026-03-31T18:19:00.000Z',
-  },
-  {
-    zone: 'ALERT',
-    lat: 9.6011,
-    lon: 79.3612,
-    timestamp: '2026-03-31T18:22:00.000Z',
-  },
-];
-
-function formatRelativeTime(timestamp) {
-  const date = new Date(timestamp);
-  const diffSec = Math.floor((Date.now() - date.getTime()) / 1000);
-  if (diffSec < 60) return `${diffSec}s ago`;
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
-  return (
-    new Intl.DateTimeFormat('en-GB', {
-      dateStyle: 'short',
-      timeStyle: 'short',
-      timeZone: 'UTC',
-    }).format(date) + ' UTC'
-  );
-}
 
 const LeafletMap = lazy(() => import('@/components/LeafletMap'));
 
-const ZONE_CONFIG = {
-  SAFE: {
-    dot: 'bg-green-400',
-    text: 'text-green-400',
-    border: 'border-green-500/30',
-    activeBg: 'bg-green-950/30',
-    glow: '34,197,94',
-    badge: 'bg-green-950/30 border-green-500/30 text-green-400',
-    alertBg: 'bg-green-950/80 border-green-500/40',
-    alertText: 'text-green-300',
-  },
-  CLEAR: {
-    dot: 'bg-cyan-400',
-    text: 'text-cyan-300',
-    border: 'border-cyan-500/30',
-    activeBg: 'bg-cyan-950/30',
-    glow: '6,182,212',
-    badge: 'bg-cyan-950/30 border-cyan-500/30 text-cyan-300',
-    alertBg: 'bg-cyan-950/80 border-cyan-500/40',
-    alertText: 'text-cyan-200',
-  },
-  ALERT: {
-    dot: 'bg-green-400',
-    text: 'text-green-400',
-    border: 'border-green-500/30',
-    activeBg: 'bg-green-950/30',
-    glow: '34,197,94',
-    badge: 'bg-green-950/30 border-green-500/30 text-green-400',
-    alertBg: 'bg-green-950/80 border-green-500/40',
-    alertText: 'text-green-300',
-  },
-  WARNING: {
-    dot: 'bg-yellow-400',
-    text: 'text-yellow-400',
-    border: 'border-yellow-500/30',
-    activeBg: 'bg-yellow-950/30',
-    glow: '250,204,21',
-    badge: 'bg-yellow-950/50 border-yellow-500/50 text-yellow-300',
-    alertBg: 'bg-yellow-950/80 border-yellow-500/40',
-    alertText: 'text-yellow-300',
-  },
-  DANGER: {
-    dot: 'bg-red-400',
-    text: 'text-red-400',
-    border: 'border-red-500/30',
-    activeBg: 'bg-red-950/30',
-    glow: '239,68,68',
-    badge: 'bg-red-950/50 border-red-500/50 text-red-300',
-    alertBg: 'bg-red-950/80 border-red-500/40',
-    alertText: 'text-red-300',
-  },
-  UNKNOWN: {
-    dot: 'bg-gray-600',
-    text: 'text-gray-500',
-    border: 'border-gray-700/50',
-    activeBg: '',
-    glow: '100,116,139',
-    badge: 'bg-gray-900/50 border-gray-700/50 text-gray-500',
-    alertBg: '',
-    alertText: '',
-  },
-};
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
-const ZONE_SEVERITY = {
-  UNKNOWN: -1,
-  CLEAR: 0,
-  ALERT: 1,
-  WARNING: 2,
-  DANGER: 3,
-};
-
-function getCrossingAlertZone(previousZone, nextZone) {
-  if (nextZone !== 'ALERT' && nextZone !== 'WARNING' && nextZone !== 'DANGER')
-    return null;
-  if (previousZone === 'UNKNOWN') return null;
-  if (ZONE_SEVERITY[nextZone] <= ZONE_SEVERITY[previousZone]) return null;
-  return nextZone;
+function zoneColor(zone) {
+  return { SAFE: '#00ff95', ALERT: '#00daf3', WARNING: '#ffb800', DANGER: '#ef4444' }[zone] || '#57607a';
+}
+function zoneBg(zone) {
+  return { SAFE: 'rgba(0,255,149,0.3)', ALERT: 'rgba(0,218,243,0.3)', WARNING: 'rgba(255,184,0,0.3)', DANGER: 'rgba(239,68,68,0.4)' }[zone] || 'rgba(87,96,122,0.3)';
+}
+function statusColor(s) {
+  return { ACTIVE: '#00ff95', CAUTION: '#ffb800', DOCKING: '#849396', OFFLINE: '#57607a' }[s] || '#00ff95';
+}
+function fmtTime() {
+  return new Date().toISOString().slice(11, 19) + ' UTC';
+}
+function nowHm() {
+  const d = new Date();
+  return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
 }
 
+// ── Main App ──────────────────────────────────────────────────────────────────
+
 export default function MaritimeDashboard() {
+  const navigate = useNavigate();
   const [vesselId, setVesselId] = useState('');
-  const [currentLocation, setCurrentLocation] = useState('Fetching...');
-  const [proximityToBorder, setProximityToBorder] = useState('--');
-  const [currentSpeed, setCurrentSpeed] = useState('--');
-  const [serverStatus, setServerStatus] = useState('Connecting...');
-  const [isNearBoundary, setIsNearBoundary] = useState(false);
-  const [zone, setZone] = useState('UNKNOWN');
-  const [nearestEEZ, setNearestEEZ] = useState('Calculating...');
-  const [boatId, setBoatId] = useState('BOAT1');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [activeNav, setActiveNav] = useState('Fleet');
+  const [activeTopTab, setActiveTopTab] = useState('TACTICAL');
+  const [showSettings, setShowSettings] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [showProfile, setShowProfile] = useState(false);
+  const [weatherLayer, setWeatherLayer] = useState('wind');
   const [boats, setBoats] = useState([]);
+  const [alerts, setAlerts] = useState([]);
   const [selectedBoatId, setSelectedBoatId] = useState(null);
   const [selectedBoat, setSelectedBoat] = useState(null);
-  const [alerts, setAlerts] = useState([]);
-  const [zoneToasts, setZoneToasts] = useState([]);
-  const [dangerModalOpen, setDangerModalOpen] = useState(false);
   const [demoMode, setDemoMode] = useState(false);
-  const [showBoundaryMenu, setShowBoundaryMenu] = useState(false);
-  const [isMobileViewport, setIsMobileViewport] = useState(false);
-  const [isMobilePanelOpen, setIsMobilePanelOpen] = useState(false);
-  const [lastUpdate, setLastUpdate] = useState(null);
-  const [, setTick] = useState(0);
+  const [serverStatus, setServerStatus] = useState('Connecting...');
+  const [toasts, setToasts] = useState([]);
+  const [showDangerModal, setShowDangerModal] = useState(false);
+  const [cmdInput, setCmdInput] = useState('');
+  const [systemStability, setSystemStability] = useState(99.8);
+  const [logisticsData, setLogisticsData] = useState({ totalSupplyCarriers: 0, networkStatus: 'UNKNOWN', vessels: [] });
+  const [commsData, setCommsData] = useState({ status: 'OFFLINE', activeChannels: [], logs: [] });
+  const [tacticalLogs, setTacticalLogs] = useState([
+    { id: 1, timestamp: '14:23:45 UTC', level: 'NOMINAL', message: 'System initialized. Radar arrays online.' },
+    { id: 2, timestamp: '14:25:12 UTC', level: 'WARNING', message: 'Unidentified vessel detected in sector 4.' },
+    { id: 3, timestamp: '14:28:05 UTC', level: 'CRITICAL', message: 'Vessel breached boundary zone. Intercept recommended.' }
+  ]);
+  const [lastUpdate, setLastUpdate] = useState(nowHm());
+  const [rawDistance, setRawDistance] = useState(99);
+  const [envData, setEnvData] = useState({ windSpeed: 18, swellHeight: 2.4, loading: true });
+  
   const previousZoneRef = useRef('UNKNOWN');
 
-  // NEW RAW STATES FOR TELEMETRY PANEL
-  const [rawLat, setRawLat] = useState(0);
-  const [rawLon, setRawLon] = useState(0);
-  const [rawSpeed, setRawSpeed] = useState(0);
-  const [rawDistance, setRawDistance] = useState(99);
+  // Check auth
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      navigate('/login');
+    }
+  }, [navigate]);
 
+  // Close dropdowns on outside click (simple approximation: just close on any nav change)
+  useEffect(() => {
+    setShowSettings(false);
+    setShowNotifications(false);
+    setShowProfile(false);
+  }, [activeTopTab, activeNav]);
+
+  // Fetch real-time environmental data
+  useEffect(() => {
+    let active = true;
+    const fetchEnv = async () => {
+      try {
+        setEnvData(prev => ({ ...prev, loading: true }));
+        // Default to a central coordinate in the Indian Ocean near Tamil Nadu
+        const lat = 10.0;
+        const lon = 79.5;
+        const [marineRes, weatherRes] = await Promise.all([
+          fetch(`https://marine-api.open-meteo.com/v1/marine?latitude=${lat}&longitude=${lon}&current=wave_height`),
+          fetch(`https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&units=metric&appid=a63a66e50c1159983af837acb9e4efa8`)
+        ]);
+        const marine = await marineRes.json();
+        const weather = await weatherRes.json();
+        if (active) {
+          const windMps = weather.wind?.speed ?? 0;
+          const windKnots = windMps * 1.94384;
+          const rainMm = weather.rain?.['1h'] ?? (weather.rain?.['3h'] ?? 0);
+          
+          setEnvData({
+            windSpeed: windKnots,
+            swellHeight: marine.current?.wave_height ?? 0,
+            clouds: weather.clouds?.all ?? 0,
+            pressure: weather.main?.pressure ?? 1012,
+            storms: rainMm,
+            loading: false
+          });
+        }
+      } catch (err) {
+        if (active) setEnvData(prev => ({ ...prev, loading: false }));
+      }
+    };
+    fetchEnv();
+    const interval = setInterval(fetchEnv, 300000); // 5 minutes
+    return () => { active = false; clearInterval(interval); };
+  }, []);
+
+  // Backend Integration hooks
   const handleLocationUpdate = useCallback((lat, lng) => {
-    setCurrentLocation(`${lat.toFixed(4)}\u00b0 N, ${lng.toFixed(4)}\u00b0 E`);
-    setRawLat(lat);
-    setRawLon(lng);
-    setLastUpdate(new Date());
+    // handled by boats state
   }, []);
 
   const handleProximityUpdate = useCallback((distance) => {
-    setProximityToBorder(`${distance.toFixed(1)} km`);
     setRawDistance(distance);
-    setIsNearBoundary(distance <= 20);
   }, []);
 
-  const handleSpeedUpdate = useCallback((speed) => {
-    setCurrentSpeed(`${speed.toFixed(1)} kn`);
-    setRawSpeed(speed);
-  }, []);
-
-  const handleZoneUpdate = useCallback((z) => {
-    setZone(z);
-  }, []);
-  const handleEEZUpdate = useCallback((name) => setNearestEEZ(name), []);
+  const handleSpeedUpdate = useCallback((speed) => {}, []);
+  const handleZoneUpdate = useCallback((z) => {}, []);
+  const handleEEZUpdate = useCallback((name) => {}, []);
 
   const handleBoatSelect = useCallback((boat) => {
     setSelectedBoat(boat);
     setSelectedBoatId(boat.boatId);
-    setBoatId(boat.boatId);
   }, []);
 
-  const handleBoatsUpdate = useCallback(
-    (nextBoats) => {
+  const handleBoatsUpdate = useCallback((nextBoats) => {
       setBoats(nextBoats);
       if (!selectedBoatId && nextBoats.length > 0) {
         setSelectedBoatId(nextBoats[0].boatId);
         setSelectedBoat(nextBoats[0]);
-        setBoatId(nextBoats[0].boatId);
         return;
       }
       if (selectedBoatId) {
-        const selected =
-          nextBoats.find((b) => b.boatId === selectedBoatId) || null;
+        const selected = nextBoats.find((b) => b.boatId === selectedBoatId) || null;
         if (selected) {
           setSelectedBoat(selected);
-          setBoatId(selected.boatId);
         }
       }
-    },
-    [selectedBoatId]
-  );
+  }, [selectedBoatId]);
 
+  // Backend connection & polling
   useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 15_000);
-    return () => clearInterval(id);
-  }, []);
+    const BACKEND_URL = getRuntimeEnv().NEXT_PUBLIC_BACKEND_URL || 'http://localhost:4000';
+    const token = localStorage.getItem('token') || '';
+    const headers = { 'Authorization': `Bearer ${token}` };
+    
+    // Socket.io connection
+    const socket = io(BACKEND_URL, {
+      extraHeaders: headers
+    });
+    
+    socket.on('connect', () => {
+      setServerStatus('Backend Connected');
+    });
+    
+    socket.on('disconnect', () => {
+      setServerStatus('Connecting...');
+    });
+    
+    socket.on('locationUpdate', (newData) => {
+      setBoats(prev => {
+        const exists = prev.find(b => b.boatId === newData.boatId);
+        if (exists) {
+          return prev.map(b => b.boatId === newData.boatId ? { ...b, ...newData } : b);
+        }
+        return [...prev, { ...newData, speed: 12.5, heading: 45, type: 'PATROL CLASS', group: 'SECTOR ' + (prev.length + 1), status: 'ACTIVE' }];
+      });
+    });
+    
+    socket.on('alertEvent', (alert) => {
+      setAlerts(prev => [{
+        id: alert._id || String(Date.now()),
+        time: new Date(alert.timestamp).toISOString().slice(11, 19) + ' UTC',
+        message: `Zone: ${alert.zone} at ${alert.lat?.toFixed(4)}, ${alert.lon?.toFixed(4)}`,
+        level: alert.zone === 'DANGER' ? 'danger' : alert.zone === 'WARNING' ? 'warning' : 'info'
+      }, ...prev].slice(0, 8));
+    });
 
-  useEffect(() => {
-    const mediaQuery = window.matchMedia('(max-width: 1023px)');
-    const syncViewport = () => {
-      const mobile = mediaQuery.matches;
-      setIsMobileViewport(mobile);
-      setIsMobilePanelOpen(!mobile);
-    };
-    syncViewport();
-    mediaQuery.addEventListener('change', syncViewport);
-    return () => mediaQuery.removeEventListener('change', syncViewport);
-  }, []);
-
-  useEffect(() => {
-    const previousZone = previousZoneRef.current;
-    if (zone === previousZone) return;
-    const alertZone = getCrossingAlertZone(previousZone, zone);
-    previousZoneRef.current = zone;
-    if (!alertZone) return;
-
-    const toast = {
-      id: Date.now() + Math.floor(Math.random() * 1000),
-      zone: alertZone,
-      message: ZONE_MESSAGES[alertZone],
-    };
-
-    setZoneToasts([toast]);
-    const timeoutId = window.setTimeout(() => {
-      setZoneToasts((prev) => prev.filter((item) => item.id !== toast.id));
-    }, 5000);
-
-    if (alertZone === 'DANGER') setDangerModalOpen(true);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [zone]);
-
-  useEffect(() => {
-    const BACKEND_URL =
-      getRuntimeEnv().NEXT_PUBLIC_BACKEND_URL || 'http://localhost:4000';
     const load = async () => {
       try {
-        const [alertRes, locRes, latestRes] = await Promise.all([
-          fetch(`${BACKEND_URL}/api/alerts`),
-          fetch(`${BACKEND_URL}/api/location`),
-          fetch(`${BACKEND_URL}/api/location/latest`),
+        const [alertRes, latestRes, logRes, commRes] = await Promise.all([
+          fetch(`${BACKEND_URL}/api/alerts`, { headers }),
+          fetch(`${BACKEND_URL}/api/location/latest`, { headers }),
+          fetch(`${BACKEND_URL}/api/logistics`, { headers }),
+          fetch(`${BACKEND_URL}/api/comms/latest`, { headers })
         ]);
-        if (alertRes.ok) setAlerts(await alertRes.json());
-        if (locRes.ok) {
-          const loc = await locRes.json();
-          if (loc.boatId) setBoatId(loc.boatId);
+        if (alertRes.ok) {
+           const alertData = await alertRes.json();
+           const formatted = alertData.map((a, i) => ({
+             id: a._id || String(i),
+             time: new Date(a.timestamp).toISOString().slice(11, 19) + ' UTC',
+             message: `Zone: ${a.zone} at ${a.lat?.toFixed(4)}, ${a.lon?.toFixed(4)}`,
+             level: a.zone === 'DANGER' ? 'danger' : a.zone === 'WARNING' ? 'warning' : 'info'
+           }));
+           if (formatted.length > 0) {
+             setAlerts(formatted);
+           } else {
+             setAlerts([
+               { id: 'init-1', time: fmtTime(), message: 'System initialized. Tactical log ready.', level: 'info' }
+             ]);
+           }
         }
+        
         if (latestRes.ok) {
           const rows = await latestRes.json();
           if (Array.isArray(rows)) {
             const normalized = rows
               .filter((r) => r?.lat !== undefined && r?.lon !== undefined)
-              .map((r) => ({
+              .map((r, i) => ({
                 boatId: String(r.boatId || 'BOAT1'),
                 lat: Number(r.lat),
                 lon: Number(r.lon),
-                zone:
-                  r.zone === 'SAFE' ||
-                  r.zone === 'WARNING' ||
-                  r.zone === 'DANGER'
-                    ? r.zone
-                    : 'UNKNOWN',
+                zone: r.zone || 'SAFE',
+                speed: 12.5,
+                heading: 45,
+                type: 'PATROL CLASS',
+                group: 'SECTOR ' + (i+1),
+                status: 'ACTIVE'
               }));
             setBoats(normalized);
-            if (normalized.length > 0 && !selectedBoatId) {
-              setSelectedBoat(normalized[0]);
-              setSelectedBoatId(normalized[0].boatId);
-            }
+            setLastUpdate(nowHm());
           }
         }
-      } catch {
-        /* backend offline */
+        
+        if (logRes.ok) {
+           const logData = await logRes.json();
+           setLogisticsData(logData);
+        }
+        
+        if (commRes.ok) {
+           const commData = await commRes.json();
+           setCommsData(commData);
+        }
+        
+      } catch (err) {
+        console.error("Fetch error:", err);
       }
     };
     load();
-    // Poll fallback: interval runs every 20s if sockets are disconnected, otherwise every 60s sync
-    const pollInterval = serverStatus === 'Backend Connected' ? 60_000 : 20_000;
-    const id = setInterval(load, pollInterval);
-    return () => clearInterval(id);
-  }, [serverStatus, selectedBoatId]);
+    const id = setInterval(load, 5_000);
+    return () => {
+      clearInterval(id);
+      socket.disconnect();
+    };
+  }, []);
 
-  const handleSearch = () => {
-    if (!vesselId.trim()) return;
-    const targetId = vesselId.trim().toUpperCase();
-    const found = boats.find((b) => b.boatId.toUpperCase() === targetId);
-    if (!found) {
-      setServerStatus(`Boat ${targetId} not found`);
-      return;
+  const currentZone = selectedBoat?.zone ?? 'SAFE';
+  const currentLocation = selectedBoat ? { lat: selectedBoat.lat, lon: selectedBoat.lon } : { lat: 1.29, lon: 103.85 };
+  const proximityToBorder = rawDistance < 99 ? rawDistance.toFixed(1) : (selectedBoat ? Math.round((selectedBoat.zone === 'DANGER' ? 1.2 : selectedBoat.zone === 'WARNING' ? 4.5 : selectedBoat.zone === 'ALERT' ? 8.3 : 24) * 10) / 10 : 24);
+  const currentSpeed = selectedBoat?.speed ?? 0;
+  const nearestEEZ = 'SCS-ZONE-7B';
+
+  const addToast = useCallback((msg, zone) => {
+    const id = Date.now().toString();
+    setToasts(prev => [...prev, { id, message: msg, zone }]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
+  }, []);
+
+  const addAlert = useCallback((msg, level) => {
+    const entry = { id: Date.now().toString(), time: fmtTime(), message: msg, level };
+    setAlerts(prev => [entry, ...prev.slice(0, 29)]);
+  }, []);
+
+  // Zone transition toasts
+  useEffect(() => {
+    const prev = previousZoneRef.current;
+    if (currentZone !== prev && currentZone !== 'UNKNOWN' && prev !== 'UNKNOWN') {
+       if (currentZone === 'DANGER' || currentZone === 'WARNING' || currentZone === 'ALERT') {
+          addToast(`${selectedBoat?.boatId || 'Vessel'} entered ${currentZone}`, currentZone);
+          addAlert(`Vessel ${selectedBoat?.boatId || 'UNKNOWN'} entered ${currentZone} zone.`, currentZone === 'DANGER' ? 'danger' : currentZone === 'WARNING' ? 'warning' : 'info');
+          if (currentZone === 'DANGER') setShowDangerModal(true);
+       }
     }
-    setSelectedBoatId(found.boatId);
-    setSelectedBoat(found);
-    setBoatId(found.boatId);
-    setServerStatus('Boat selected');
-  };
+    previousZoneRef.current = currentZone;
+  }, [currentZone, selectedBoat, addToast, addAlert]);
 
-  const isConnected =
-    serverStatus === 'Backend Connected' || serverStatus === 'Demo Mode Active';
-  const zoneCfg = ZONE_CONFIG[zone] ?? ZONE_CONFIG.UNKNOWN;
-  const displayAlerts = alerts.length > 0 ? alerts : SAMPLE_ALERTS;
-  const showPanelContent = !isMobileViewport || isMobilePanelOpen;
-  const compactAlertText =
-    zone === 'DANGER'
-      ? 'Boundary crossed'
-      : zone === 'WARNING'
-        ? 'Boundary nearby'
-        : zone === 'ALERT'
-          ? '20km monitoring zone'
-          : 'Deep Indian Waters';
-  const filteredBoats = boats.filter((b) =>
-    b.boatId.toLowerCase().includes(vesselId.trim().toLowerCase())
-  );
-  const safeCount = boats.filter((b) => b.zone === 'SAFE').length;
-  const warningCount = boats.filter((b) => b.zone === 'WARNING').length;
-  const dangerCount = boats.filter((b) => b.zone === 'DANGER').length;
+  const filteredBoats = vesselId ? boats.filter(b => b.boatId.toLowerCase().includes(vesselId.toLowerCase())) : boats;
+
+  function handleCmdSubmit() {
+    if (!cmdInput.trim()) return;
+    addAlert(`CMD: ${cmdInput}`, 'info');
+    setCmdInput('');
+  }
+
+  const navItems = [
+    { label: 'Fleet', icon: <svg viewBox="0 0 18.45 20" className="w-[18px] h-[20px]"><path d={svgPaths.p348f1400} fill="currentColor" /></svg> },
+    { label: 'Sensors', icon: <svg viewBox="0 0 20 20" className="w-5 h-5"><path d={svgPaths.pb4d1000} fill="currentColor" /></svg> },
+    { label: 'Threats', icon: <svg viewBox="0 0 22 19" className="w-[22px] h-[19px]"><path d={svgPaths.p7555480} fill="currentColor" /></svg> },
+    { label: 'Weather', icon: <svg viewBox="0 0 22 16" className="w-[22px] h-[16px]"><path d={svgPaths.pebcf900} fill="currentColor" /></svg> },
+    { label: 'Logs', icon: <svg viewBox="0 0 24 24" className="w-[19px] h-[20px]"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z" fill="currentColor"/></svg> },
+  ];
+
+  const alertLevel = boats.reduce((worst, b) => {
+    const rank = { SAFE: 0, ALERT: 1, WARNING: 2, DANGER: 3 };
+    return rank[b.zone] > rank[worst] ? b.zone : worst;
+  }, 'SAFE');
+
+  const isConnected = serverStatus === 'Backend Connected' || serverStatus === 'Demo Mode Active';
 
   return (
-    <div className="min-h-screen text-white font-sans flex flex-col bg-[#020817]">
-      <div className="fixed top-16 right-3 z-[3000] flex flex-col gap-2 pointer-events-none w-[min(92vw,420px)]">
-        {zoneToasts.map((toast) => {
-          const toastStyle =
-            toast.zone === 'DANGER'
-              ? 'border-red-500/50 bg-red-950/90 text-red-100'
-              : toast.zone === 'WARNING'
-                ? 'border-yellow-500/50 bg-yellow-950/90 text-yellow-100'
-                : toast.zone === 'ALERT'
-                  ? 'border-green-500/50 bg-green-950/90 text-green-100'
-                  : 'border-cyan-500/50 bg-cyan-950/90 text-cyan-100';
-
-          return (
-            <div
-              key={toast.id}
-              role="status"
-              aria-live="polite"
-              className={`pointer-events-auto rounded-lg border px-3 py-2 shadow-[0_8px_30px_rgba(0,0,0,0.45)] backdrop-blur-sm ${toastStyle}`}
-            >
-              <p className="text-[11px] md:text-xs font-bold uppercase tracking-wider opacity-90">
-                {toast.zone}
-              </p>
-              <p className="text-xs md:text-sm font-semibold">
-                {toast.message}
-              </p>
-            </div>
-          );
-        })}
-      </div>
-
-      {dangerModalOpen && zone === 'DANGER' && (
-        <div className="fixed inset-0 z-[3200] bg-black/70 backdrop-blur-[2px] flex items-center justify-center p-4">
-          <div
-            role="alertdialog"
-            aria-modal="true"
-            aria-label="Danger zone alert"
-            className="w-full max-w-lg rounded-xl border border-red-500/50 bg-[#1b0a0a] shadow-[0_14px_60px_rgba(239,68,68,0.3)]"
-          >
-            <div className="px-5 py-4 border-b border-red-500/30">
-              <p className="text-xs uppercase tracking-[0.2em] text-red-300 font-bold">
-                Danger Alert
-              </p>
-              <h3 className="text-lg md:text-xl font-black text-red-200 mt-1">
-                Maritime Boundary Breach
-              </h3>
-            </div>
-            <div className="px-5 py-4">
-              <p className="text-sm md:text-base text-red-100 font-semibold">
-                {ZONE_MESSAGES.DANGER}
-              </p>
-              <p className="text-xs md:text-sm text-red-200/80 mt-2">
-                Vessel {boatId} is currently inside danger waters. Initiate
-                return protocol immediately.
-              </p>
-            </div>
-            <div className="px-5 py-4 border-t border-red-500/30 flex justify-end">
-              <button
-                onClick={() => setDangerModalOpen(false)}
-                className="px-3 py-2 rounded-md text-sm font-semibold bg-red-600 hover:bg-red-500 text-white transition-colors"
-              >
-                Acknowledge
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div className="fixed inset-0 pointer-events-none" aria-hidden="true">
-        <div className="absolute inset-0 bg-gradient-to-br from-[#020817] via-[#0a1628] to-[#071525]" />
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,_rgba(6,182,212,0.10)_0%,_transparent_50%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_bottom_right,_rgba(34,197,94,0.07)_0%,_transparent_50%)]" />
-      </div>
-
-      <div className="relative z-10 flex flex-col flex-1 min-h-0">
-        {isMobileViewport && (
-          <button
-            onClick={() => setIsMobilePanelOpen((open) => !open)}
-            className="fixed top-[60px] left-3 z-[2600] lg:hidden px-3 py-2 rounded-lg border border-cyan-500/40 bg-[#0d2137]/90 backdrop-blur-sm text-cyan-200 text-xs font-semibold uppercase tracking-wider shadow-[0_6px_20px_rgba(0,0,0,0.45)] transition-all duration-300"
-          >
-            {isMobilePanelOpen ? 'Map Only' : 'Show Panel'}
-          </button>
-        )}
-
-        {/* Top controls */}
-        <header className="flex items-center justify-between px-3 md:px-6 py-3 md:py-4 border-b border-[#1e3a5f]/50 gap-3 md:gap-4 flex-wrap">
-          <div
-            className={`flex items-center gap-1 md:gap-2 flex-wrap w-full lg:w-auto transition-all duration-300 overflow-hidden ${showPanelContent ? 'max-h-[240px] opacity-100' : 'max-h-0 opacity-0 pointer-events-none lg:max-h-[240px] lg:opacity-100 lg:pointer-events-auto'}`}
-          >
-            <div className="flex items-center bg-[#0d2137] rounded-lg overflow-hidden border border-[#1e3a5f] flex-1 md:flex-none">
-              <input
-                type="text"
-                placeholder="Vessel ID..."
-                value={vesselId}
-                onChange={(e) => setVesselId(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-                className="bg-transparent px-3 py-2 text-base text-cyan-300 placeholder-cyan-700/50 focus:outline-none w-40"
-              />
-
-              <button
-                onClick={handleSearch}
-                aria-label="Search vessel"
-                className="px-3 py-2 hover:bg-[#1e3a5f]/40 transition-colors border-l border-[#1e3a5f]"
-              >
-                <svg
-                  className="w-4 h-4 text-gray-400"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                  />
-                </svg>
-              </button>
-            </div>
-
-            {vesselId.trim().length > 0 && (
-              <div className="w-full md:w-auto md:min-w-[220px] max-h-24 overflow-y-auto rounded-lg border border-[#1e3a5f] bg-[#0d2137] px-2 py-1">
-                {filteredBoats.length === 0 && (
-                  <p className="text-xs text-gray-500 py-1">
-                    No matching boats
-                  </p>
-                )}
-                {filteredBoats.map((b) => (
-                  <button
-                    key={b.boatId}
-                    onClick={() => {
-                      setSelectedBoatId(b.boatId);
-                      setSelectedBoat(b);
-                      setBoatId(b.boatId);
-                    }}
-                    className={`w-full text-left text-xs px-2 py-1 rounded ${selectedBoatId === b.boatId ? 'bg-cyan-900/40 text-cyan-200' : 'text-gray-300 hover:bg-[#1e3a5f]/40'}`}
-                  >
-                    {b.boatId} · {b.zone}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            <div className="hidden md:flex items-center gap-2 px-3.5 py-2 rounded-lg bg-[#0d2137] border border-[#1e3a5f] flex-shrink-0">
-              <div
-                className={`w-2 h-2 rounded-full flex-shrink-0 ${isConnected ? 'bg-green-400 animate-pulse' : 'bg-red-500'}`}
-              />
-              <span className="text-sm font-medium text-gray-300">
-                {boatId}
-              </span>
-              <span
-                className={`text-sm ${isConnected ? 'text-green-400' : 'text-red-400'}`}
-              >
-                {serverStatus}
-              </span>
-              {lastUpdate && (
-                <span
-                  className="text-sm text-gray-500 hidden sm:block"
-                  suppressHydrationWarning
-                >
-                  &middot;{' '}
-                  {Math.round((Date.now() - lastUpdate.getTime()) / 1000)}s ago
-                </span>
-              )}
-            </div>
-
-            <button
-              onClick={() => setDemoMode((m) => !m)}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-semibold transition-all border ${
-                demoMode
-                  ? 'bg-purple-700/50 border-purple-400/60 text-white shadow-[0_0_12px_rgba(147,51,234,0.35)]'
-                  : 'bg-[#0d2137] border-[#1e3a5f] text-gray-300 hover:border-purple-500/50 hover:text-purple-300'
-              }`}
-            >
-              <span
-                className={`w-2 h-2 rounded-full flex-shrink-0 ${demoMode ? 'bg-purple-300 animate-pulse' : 'bg-gray-600'}`}
-              />
-              {demoMode ? 'Stop Demo' : 'Demo Mode'}
-            </button>
-          </div>
-        </header>
-
-        {/* Hardware + Zone Status Bar */}
-        <div
-          className={`flex items-center gap-2 md:gap-6 px-3 md:px-6 py-2 md:py-2.5 border-b border-[#1e3a5f]/30 bg-[#071525]/80 flex-wrap text-xs md:text-base transition-all duration-300 overflow-hidden ${showPanelContent ? 'max-h-[160px] opacity-100' : 'max-h-0 opacity-0 border-b-0 py-0'}`}
-        >
-          <div className="flex items-center gap-1 md:gap-2 flex-shrink-0">
-            <div
-              className={`relative w-3 md:w-4 h-3 md:h-4 rounded-full flex-shrink-0 transition-all duration-300 ${
-                zone === 'DANGER'
-                  ? 'bg-red-500 shadow-[0_0_10px_3px_rgba(239,68,68,0.6)]'
-                  : zone === 'WARNING'
-                    ? 'bg-yellow-400 shadow-[0_0_10px_3px_rgba(250,204,21,0.5)] animate-pulse'
-                    : zone === 'ALERT'
-                      ? 'bg-green-400 shadow-[0_0_10px_3px_rgba(34,197,94,0.5)]'
-                      : 'bg-gray-700 border border-gray-600'
-              }`}
-            />
-            <span className="text-sm text-gray-500 uppercase tracking-wider">
-              LED
-            </span>
-            <span
-              className={`text-sm font-semibold ${zone === 'DANGER' ? 'text-red-400' : zone === 'WARNING' ? 'text-yellow-400' : zone === 'ALERT' ? 'text-green-400' : 'text-gray-600'}`}
-            >
-              {zone === 'DANGER'
-                ? 'ON'
-                : zone === 'WARNING'
-                  ? 'BLINK'
-                  : zone === 'ALERT'
-                    ? 'ON'
-                    : 'OFF'}
-            </span>
-          </div>
-
-          <div className="w-px h-4 bg-[#1e3a5f]" aria-hidden="true" />
-
-          <div className="flex items-center gap-2">
-            <svg
-              className={`w-4 h-4 flex-shrink-0 ${zone === 'DANGER' ? 'text-red-400 drop-shadow-[0_0_5px_rgba(239,68,68,0.8)]' : zone === 'WARNING' ? 'text-yellow-400' : 'text-gray-600'}`}
-              fill="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path d="M3 9v6h4l5 5V4L7 9H3z" />
-              {zone === 'DANGER' && (
-                <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z" />
-              )}
-            </svg>
-            <span className="text-sm text-gray-500 uppercase tracking-wider">
-              Buzzer
-            </span>
-            <span
-              className={`text-sm font-semibold ${zone === 'DANGER' ? 'text-red-400' : zone === 'WARNING' ? 'text-yellow-400' : 'text-gray-600'}`}
-            >
-              {zone === 'DANGER'
-                ? 'ACTIVE'
-                : zone === 'WARNING'
-                  ? 'STANDBY'
-                  : 'OFF'}
-            </span>
-          </div>
-
-          <div className="w-px h-4 bg-[#1e3a5f]" aria-hidden="true" />
-
-          <div
-            role="status"
-            aria-label={`Current zone: ${zone}`}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-sm font-bold uppercase tracking-wider ${zoneCfg.badge}`}
-          >
-            <span
-              className={`w-2 h-2 rounded-full flex-shrink-0 ${zoneCfg.dot} ${zone === 'WARNING' || zone === 'DANGER' ? 'animate-pulse' : ''}`}
-            />
-            Zone: {zone}
-          </div>
-
-          {demoMode && (
-            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-purple-500/40 bg-purple-900/20 ml-auto">
-              <span className="w-2 h-2 rounded-full bg-purple-400 animate-pulse" />
-              <span className="text-purple-300 text-sm font-semibold uppercase tracking-wider">
-                Demo Active
-              </span>
-            </div>
-          )}
-        </div>
-
-        {/* Zone Alert Banner */}
-        {showPanelContent &&
-          (zone === 'DANGER' || zone === 'WARNING' || zone === 'ALERT') && (
-            <div
-              role="alert"
-              className={`flex flex-col md:flex-row items-start md:items-center gap-2 md:gap-3 px-3 md:px-6 py-2 md:py-2.5 border-b ${zoneCfg.alertBg}`}
-            >
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <div
-                  className={`w-2 h-2 rounded-full animate-pulse flex-shrink-0 ${zoneCfg.dot}`}
-                />
-                <span
-                  className={`text-xs md:text-base font-semibold ${zoneCfg.alertText}`}
-                >
-                  {zone === 'DANGER'
-                    ? 'DANGER ZONE'
-                    : zone === 'WARNING'
-                      ? 'WARNING ZONE'
-                      : 'ALERT ZONE'}
-                </span>
-              </div>
-              <span
-                className={`text-xs md:text-sm ${zoneCfg.alertText} hidden md:inline`}
-              >
-                {zone === 'DANGER'
-                  ? 'CRITICAL: Turn back immediately!'
-                  : zone === 'WARNING'
-                    ? 'WARNING: 12km Zone. Proceed with caution.'
-                    : 'ALERT: Entered 20km Border Monitoring Zone.'}
-              </span>
-              <div className="ml-auto flex items-center gap-3 text-sm text-gray-400 flex-shrink-0">
-                <span>{boatId}</span>
-                <span>{proximityToBorder} to border</span>
-              </div>
-            </div>
-          )}
-
-        {/* Main Content */}
-        <div
-          className={`flex flex-col lg:flex-row flex-1 min-h-0 gap-2 md:gap-5 transition-all duration-300 ${showPanelContent ? 'p-2 md:p-5' : 'p-0'}`}
-        >
-          {/* Sidebar metric cards */}
-          <div
-            className={`flex flex-col md:flex-row lg:flex-col gap-2 md:gap-3 lg:w-72 xl:w-80 flex-shrink-0 order-last lg:order-first transition-all duration-300 overflow-hidden ${showPanelContent ? 'max-h-[900px] opacity-100' : 'max-h-0 opacity-0 pointer-events-none'}`}
-          >
-            <MetricCard
-              label="Current Location"
-              value={currentLocation}
-              accent="cyan"
-              icon={
-                <svg
-                  className="w-5 h-5 text-white"
-                  fill="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />
-                </svg>
-              }
-            />
-            <MetricCard
-              label="Proximity to Border"
-              value={proximityToBorder}
-              accent={isNearBoundary ? 'red' : 'green'}
-              alert={isNearBoundary}
-              icon={
-                <svg
-                  className="w-5 h-5 text-white"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <circle cx="12" cy="12" r="10" strokeWidth={2} />
-                  <circle cx="12" cy="12" r="6" strokeWidth={2} />
-                  <circle cx="12" cy="12" r="2" strokeWidth={2} />
-                  <path
-                    strokeLinecap="round"
-                    strokeWidth={2}
-                    d="M12 2v4M12 18v4M2 12h4M18 12h4"
-                  />
-                </svg>
-              }
-            />
-            <MetricCard
-              label="Current Speed"
-              value={currentSpeed}
-              accent="cyan"
-              icon={
-                <svg
-                  className="w-5 h-5 text-white"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M13 10V3L4 14h7v7l9-11h-7z"
-                  />
-                </svg>
-              }
-            />
-            <MetricCard
-              label="Nearest EEZ"
-              value={nearestEEZ.replace(' EEZ', '')}
-              accent="amber"
-              icon={
-                <svg
-                  className="w-5 h-5 text-white"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064"
-                  />
-                </svg>
-              }
-            />
-            <div className="rounded-md md:rounded-xl border border-[#1e3a5f]/50 bg-[#0a1f35] px-3 py-2">
-              <p className="text-[10px] uppercase tracking-widest text-gray-500">
-                Selected Boat
-              </p>
-              <p className="text-sm font-bold text-cyan-300">
-                {selectedBoat?.boatId || boatId}
-              </p>
-              <p className="text-xs text-gray-300">
-                Lat: {selectedBoat ? selectedBoat.lat.toFixed(4) : '--'}
-              </p>
-              <p className="text-xs text-gray-300">
-                Lon: {selectedBoat ? selectedBoat.lon.toFixed(4) : '--'}
-              </p>
-              <p className="text-xs text-gray-300">
-                Zone: {selectedBoat?.zone || zone}
-              </p>
-            </div>
-          </div>
-
-          {/* Map */}
-          <div
-            className="flex-1 relative rounded-xl overflow-hidden"
-            style={{
-              minHeight: '500px',
-              border: '1px solid rgba(30, 58, 95, 0.5)',
-              boxShadow: '0 0 30px rgba(6, 182, 212, 0.06)',
-            }}
-          >
-            <Suspense fallback={
-              <div
-                className="w-full h-full rounded-xl bg-[#0a2540] flex items-center justify-center"
-                style={{ minHeight: '500px' }}
-              >
-                <div className="flex flex-col items-center gap-3">
-                  <div className="w-8 h-8 border-4 border-cyan-400 border-t-transparent rounded-full animate-spin" />
-                  <span className="text-cyan-400 text-sm">Loading Map...</span>
-                </div>
-              </div>
-            }>
-              <LeafletMap
+    <div className="relative w-screen h-screen overflow-hidden bg-[#020817]" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+      
+      {/* ── Background Map Layer (No filter to keep natural satellite colors) ── */}
+      <div className="absolute inset-0 z-0 bg-[#020817]">
+        <Suspense fallback={<div className="flex w-full h-full items-center justify-center text-cyan-400">Loading Map...</div>}>
+           <LeafletMap
               onLocationUpdate={handleLocationUpdate}
               onProximityUpdate={handleProximityUpdate}
               onSpeedUpdate={handleSpeedUpdate}
@@ -779,378 +324,762 @@ export default function MaritimeDashboard() {
               onBoatSelect={handleBoatSelect}
               onBoatsUpdate={handleBoatsUpdate}
               selectedBoatId={selectedBoatId}
-                demoMode={demoMode}
-              />
-            </Suspense>
+              demoMode={demoMode}
+              weatherLayer={activeNav === 'Weather' ? weatherLayer : null}
+            />
+        </Suspense>
+      </div>
 
-            {isMobileViewport && (
-              <div className="absolute top-3 right-3 z-[1200] rounded-lg border border-cyan-500/30 bg-[#071525]/88 backdrop-blur-sm px-3 py-2 shadow-[0_8px_24px_rgba(0,0,0,0.45)]">
-                <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-gray-400">
-                  <span
-                    className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-400' : 'bg-red-500'}`}
-                  />
-                  {boatId}
-                </div>
-                <p className={`text-xs font-bold mt-1 ${zoneCfg.text}`}>
-                  {zone}
-                </p>
-                <p className="text-[11px] text-gray-300">{compactAlertText}</p>
-                <p className="text-[10px] text-gray-500">{proximityToBorder}</p>
+      {/* ── Weather Canvas Overlay (SkyLayer UI) ── */}
+
+      {/* ── Top Navigation Bar (Floating) ── */}
+      <header className="absolute top-4 left-4 right-4 h-[52px] bg-[rgba(8,15,17,0.75)] backdrop-blur-md border border-[rgba(59,73,76,0.5)] rounded-2xl px-6 flex items-center gap-8 z-20 shadow-[0_8px_32px_rgba(0,0,0,0.4)] pointer-events-auto">
+        <span className="text-[#c3f5ff] text-[17px] font-bold tracking-[0.06em] shrink-0" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
+          AEGIS MARITIME COMMAND
+        </span>
+        <div className="flex items-center gap-1.5">
+          {['TACTICAL', 'BOUNDARY GRID', 'LOGISTICS', 'COMMS'].map(tab => (
+            <button key={tab} onClick={() => setActiveTopTab(tab)} className={`px-4 py-1.5 text-[11px] tracking-widest rounded-md transition-all cursor-pointer ${activeTopTab === tab ? 'text-[#c3f5ff] bg-[rgba(195,245,255,0.08)] font-semibold shadow-inner' : 'text-[#bac9cc] hover:text-[#dce4e5] hover:bg-[rgba(255,255,255,0.04)]'}`}>
+              {tab}
+            </button>
+          ))}
+        </div>
+        
+<div className="flex-1 flex justify-center pointer-events-none"></div>
+
+        <div className="flex items-center gap-3 px-4 py-1.5 rounded-md border text-[11px] font-bold tracking-widest shadow-inner shrink-0"
+          style={{ borderColor: zoneColor(alertLevel), color: zoneColor(alertLevel), background: zoneBg(alertLevel) }}>
+          <span className="animate-pulse-dot">⚠</span>
+          ALERT LEVEL: {alertLevel === 'SAFE' ? 'GREEN' : alertLevel === 'ALERT' ? 'BLUE' : alertLevel === 'WARNING' ? 'YELLOW' : 'RED'}
+        </div>
+        
+        <div className="flex items-center gap-4 ml-2 shrink-0">
+          {/* Settings */}
+          <div className="relative flex items-center">
+            <button onClick={() => {setShowSettings(!showSettings); setShowNotifications(false); setShowProfile(false);}} className={`transition-colors cursor-pointer ${showSettings ? 'text-[#c3f5ff]' : 'text-[#bac9cc] hover:text-[#c3f5ff]'}`}>
+              <svg viewBox="0 0 20 20" className="w-5 h-5"><path d={svgPaths.p3cdadd00} fill="currentColor" /></svg>
+            </button>
+            {showSettings && (
+              <div className="absolute top-[180%] right-[-10px] w-64 bg-[rgba(10,15,20,0.95)] backdrop-blur-xl border border-[rgba(59,73,76,0.6)] rounded-xl shadow-[0_15px_50px_rgba(0,0,0,0.6)] p-4 z-[5000] animate-fade-in">
+                 <div className="text-[#c3f5ff] text-[12px] font-bold tracking-widest mb-3 border-b border-[rgba(59,73,76,0.5)] pb-2">SYSTEM SETTINGS</div>
+                 <div className="flex flex-col gap-3 text-[11px] text-[#dce4e5]">
+                   <label className="flex items-center justify-between cursor-pointer group"><span className="tracking-wider group-hover:text-[#00daf3] transition-colors">AUDIO ALERTS</span><input type="checkbox" defaultChecked className="accent-[#00daf3]" /></label>
+                   <label className="flex items-center justify-between cursor-pointer group"><span className="tracking-wider group-hover:text-[#00daf3] transition-colors">HIGH CONTRAST</span><input type="checkbox" className="accent-[#00daf3]" /></label>
+                   <label className="flex items-center justify-between cursor-pointer group"><span className="tracking-wider group-hover:text-[#00daf3] transition-colors">DATA STREAM</span><input type="checkbox" defaultChecked className="accent-[#00daf3]" /></label>
+                   <label className="flex items-center justify-between cursor-pointer group mt-2 pt-2 border-t border-[rgba(59,73,76,0.3)]"><span className="tracking-wider text-[#ef4444] font-bold">CLEAR CACHE</span></label>
+                 </div>
               </div>
             )}
+          </div>
+          
+          {/* Notifications */}
+          <div className="relative flex items-center">
+            <button onClick={() => {setShowNotifications(!showNotifications); setShowSettings(false); setShowProfile(false);}} className={`transition-colors cursor-pointer relative ${showNotifications ? 'text-[#c3f5ff]' : 'text-[#bac9cc] hover:text-[#c3f5ff]'}`}>
+              <svg viewBox="0 0 16 20" className="w-4 h-5"><path d={svgPaths.p164b49c0} fill="currentColor" /></svg>
+              {alerts.length > 0 && <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-[#ef4444] rounded-full animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.8)]" />}
+            </button>
+            {showNotifications && (
+              <div className="absolute top-[180%] right-[-10px] w-80 bg-[rgba(10,15,20,0.95)] backdrop-blur-xl border border-[rgba(59,73,76,0.6)] rounded-xl shadow-[0_15px_50px_rgba(0,0,0,0.6)] overflow-hidden z-[5000] flex flex-col max-h-[350px] animate-fade-in">
+                 <div className="bg-[rgba(30,40,45,0.8)] px-4 py-3 border-b border-[rgba(59,73,76,0.5)] flex justify-between items-center">
+                   <span className="text-[#c3f5ff] text-[12px] font-bold tracking-widest">RECENT ALERTS</span>
+                   <button className="text-[9px] text-[#8a96ad] hover:text-[#c3f5ff] transition-colors cursor-pointer" onClick={() => setAlerts([])}>CLEAR ALL</button>
+                 </div>
+                 <div className="overflow-y-auto p-2 flex flex-col gap-1 custom-scrollbar">
+                   {alerts.length === 0 ? <div className="text-center p-6 text-[#5a6478] text-[10px]">No alerts</div> : 
+                     alerts.slice(0, 8).map(a => (
+                       <div key={a.id} className="px-3 py-2 bg-[rgba(255,255,255,0.03)] hover:bg-[rgba(255,255,255,0.06)] rounded-lg text-[10px] text-[#dce4e5] cursor-pointer transition-colors border border-transparent hover:border-[rgba(59,73,76,0.5)]">
+                         <div className="font-bold mb-1" style={{ color: a.level === 'danger' ? '#ef4444' : a.level === 'warning' ? '#ffb800' : '#00daf3' }}>{a.time}</div>
+                         <div className="leading-relaxed opacity-90">{a.message}</div>
+                       </div>
+                     ))
+                   }
+                 </div>
+              </div>
+            )}
+          </div>
+          
+          {/* Profile */}
+          <div className="relative flex items-center">
+            <button onClick={() => {setShowProfile(!showProfile); setShowSettings(false); setShowNotifications(false);}} className={`transition-colors cursor-pointer ${showProfile ? 'text-[#c3f5ff]' : 'text-[#bac9cc] hover:text-[#c3f5ff]'}`}>
+              <svg viewBox="0 0 20 20" className="w-5 h-5"><path d={svgPaths.p3de21300} fill="currentColor" /></svg>
+            </button>
+            {showProfile && (
+              <div className="absolute top-[180%] right-[-10px] w-60 bg-[rgba(10,15,20,0.95)] backdrop-blur-xl border border-[rgba(59,73,76,0.6)] rounded-xl shadow-[0_15px_50px_rgba(0,0,0,0.6)] p-5 z-[5000] flex flex-col items-center animate-fade-in">
+                 <div className="w-16 h-16 bg-[#00e5ff] rounded-full overflow-hidden relative mb-4 border-2 border-[rgba(195,245,255,0.4)] shadow-[0_0_20px_rgba(0,229,255,0.2)]">
+                   <img src={imgAvatar} alt="" className="absolute h-full left-[-70%] top-0 w-[240%] max-w-none opacity-90 mix-blend-multiply" />
+                 </div>
+                 <div className="text-[#c3f5ff] text-[15px] font-bold tracking-[0.06em] mb-1" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>ADMIRAL J.</div>
+                 <div className="text-[#00ff95] text-[10px] tracking-widest font-bold mb-5 bg-[rgba(0,255,149,0.1)] px-3 py-1 rounded-full border border-[rgba(0,255,149,0.2)]">CLEARANCE: LEVEL 7</div>
+                 <div className="w-full h-[1px] bg-[rgba(59,73,76,0.5)] mb-3" />
+                 <button onClick={() => { localStorage.removeItem('token'); localStorage.removeItem('role'); navigate('/login'); }} className="w-full py-2.5 bg-[rgba(239,68,68,0.1)] text-[10px] text-[#ef4444] border border-transparent hover:border-[rgba(239,68,68,0.5)] hover:bg-[rgba(239,68,68,0.2)] rounded-lg tracking-widest font-bold cursor-pointer transition-all">SECURE LOGOUT</button>
+              </div>
+            )}
+          </div>
+        </div>
+      </header>
+      {/* ── Weather Toggle Pill ── */}
+      <div className={`absolute top-[72px] left-1/2 -translate-x-1/2 z-20 transition-all duration-300 ${activeNav === 'Weather' && activeTopTab === 'TACTICAL' ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}>
+        <div className="flex items-center bg-[rgba(10,14,26,0.85)] border border-[rgba(255,255,255,0.08)] rounded-full shadow-[0_8px_32px_rgba(0,0,0,0.4)] backdrop-blur-md p-1">
+          {['wind', 'clouds', 'storm', 'pressure'].map(mode => (
+            <button
+              key={mode}
+              onClick={() => setWeatherLayer(mode)}
+              className={`px-6 py-2 text-[10px] font-bold tracking-[0.15em] rounded-full transition-all ${weatherLayer === mode ? 'bg-[#304865] text-[#c3f5ff] shadow-inner' : 'text-[#8a96ad] hover:text-[#dce4e5] hover:bg-[rgba(255,255,255,0.04)]'}`}
+            >
+              {mode.toUpperCase()}
+            </button>
+          ))}
+        </div>
+      </div>
+      
+      {/* ── Weather Legends ── */}
+      <div className={`absolute bottom-6 left-[80px] z-20 transition-all duration-300 ${activeNav === 'Weather' && activeTopTab === 'TACTICAL' ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}>
+        <div className="bg-[rgba(10,14,26,0.75)] border border-[rgba(255,255,255,0.12)] rounded-xl p-4 backdrop-blur-md text-[#dfe6f0] text-[11px] w-[260px] shadow-[0_8px_32px_rgba(0,0,0,0.4)]">
+          <div className="font-semibold mb-2 text-[#f2f5fa]">
+            {weatherLayer === 'wind' ? 'Wind (Bft)' : weatherLayer === 'clouds' ? 'Cloud Cover (%)' : weatherLayer === 'storm' ? 'Storm/Precipitation (mm/h)' : 'Pressure (hPa)'}
+          </div>
+          <div className="w-full h-[9px] rounded-[5px] my-1.5" style={{
+            background: weatherLayer === 'wind' ? 'linear-gradient(to right, rgb(35,70,170) 0%, rgb(35,150,185) 25%, rgb(70,185,120) 41.7%, rgb(190,215,80) 58.3%, rgb(230,180,60) 75%, rgb(230,120,50) 83.3%, rgb(210,70,50) 91.7%, rgb(150,30,40) 100%)' :
+                        weatherLayer === 'clouds' ? 'linear-gradient(to right, rgb(50,60,80) 0%, rgb(100,110,130) 25%, rgb(150,160,180) 50%, rgb(200,210,220) 75%, rgb(240,245,255) 100%)' :
+                        weatherLayer === 'storm' ? 'linear-gradient(to right, rgb(10,30,50) 0%, rgb(100,150,250) 20%, rgb(50,100,220) 40%, rgb(20,50,180) 60%, rgb(150,50,150) 80%, rgb(255,0,0) 100%)' :
+                        'linear-gradient(to right, rgb(40,60,150) 0%, rgb(70,110,190) 20%, rgb(140,180,210) 40%, rgb(225,220,200) 60%, rgb(220,150,90) 80%, rgb(190,70,50) 100%)'
+          }}></div>
+          <div className="flex justify-between text-[9px] text-[#93a0b6]">
+            {weatherLayer === 'wind' ? (
+              <><span>0</span><span>3</span><span>5</span><span>7</span><span>9</span><span>10</span><span>11</span><span>12</span></>
+            ) : weatherLayer === 'clouds' ? (
+              <><span>0</span><span>25</span><span>50</span><span>75</span><span>100</span></>
+            ) : weatherLayer === 'storm' ? (
+              <><span>0</span><span>0.5</span><span>2</span><span>5</span><span>10</span><span>20+</span></>
+            ) : (
+              <><span>970</span><span>985</span><span>1000</span><span>1015</span><span>1030</span><span>1045</span></>
+            )}
+          </div>
+        </div>
+      </div>
 
-            {/* Mobile/Tablet Status overlay (Hidden on Desktop) */}
-            <div className="lg:hidden absolute bottom-3 left-3 right-3 z-[1000] pointer-events-none">
-              <div
-                className="grid grid-cols-2 sm:grid-cols-4 gap-3 rounded-xl p-4"
-                style={{
-                  background: 'rgba(10, 22, 40, 0.9)',
-                  backdropFilter: 'blur(12px)',
-                  border: '1px solid rgba(30, 58, 95, 0.4)',
-                }}
-              >
-                <OverlayStat
-                  label="Location"
-                  value={currentLocation}
-                  color={isNearBoundary ? 'text-red-300' : 'text-cyan-300'}
-                />
-                <OverlayStat
-                  label="Distance"
-                  value={proximityToBorder}
-                  color={isNearBoundary ? 'text-red-300' : 'text-green-300'}
-                />
-                <OverlayStat
-                  label="Speed"
-                  value={currentSpeed}
-                  color="text-cyan-300"
-                />
-                <OverlayStat label="Zone" value={zone} color={zoneCfg.text} />
+
+      {/* ── Top Tabs Overlays ── */}
+      {activeTopTab !== 'TACTICAL' && activeTopTab !== 'BOUNDARY GRID' && (
+        <div className="absolute inset-0 z-[15] backdrop-blur-xl bg-[rgba(2,8,23,0.85)] pointer-events-auto flex items-center justify-center p-20 animate-fade-in">
+           {activeTopTab === 'STRATEGIC' && (
+             <div className="w-full h-full border border-[rgba(59,73,76,0.6)] rounded-3xl flex flex-col p-10 shadow-[0_0_50px_rgba(0,0,0,0.5)] relative overflow-hidden bg-[rgba(10,15,20,0.5)]">
+                <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-[rgba(0,218,243,0.05)] rounded-full blur-[100px] pointer-events-none" />
+                <h1 className="text-[#c3f5ff] text-[36px] font-bold tracking-[0.1em] mb-10" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>STRATEGIC OVERVIEW</h1>
+                <div className="grid grid-cols-3 gap-8 flex-1">
+                  <div className="bg-[rgba(10,14,26,0.5)] border border-[rgba(59,73,76,0.6)] rounded-2xl p-8 flex flex-col justify-between hover:border-[rgba(195,245,255,0.3)] transition-colors">
+                    <div>
+                      <h3 className="text-[#8a96ad] text-[12px] font-bold tracking-widest mb-4">GLOBAL FLEET READINESS</h3>
+                      <div className="text-[64px] text-[#00ff95] font-bold mb-2 leading-none" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>94%</div>
+                      <div className="text-[12px] text-[#dce4e5] opacity-80 leading-relaxed mt-4">All primary patrol vessels are fully operational and responding to automated ping sequences within nominal thresholds.</div>
+                    </div>
+                    <div className="w-full h-3 bg-[#192122] rounded-full overflow-hidden mt-6 shadow-inner"><div className="w-[94%] h-full bg-gradient-to-r from-[#00daf3] to-[#00ff95]" /></div>
+                  </div>
+                  <div className="bg-[rgba(10,14,26,0.5)] border border-[rgba(59,73,76,0.6)] rounded-2xl p-8 flex flex-col justify-between hover:border-[rgba(195,245,255,0.3)] transition-colors">
+                    <div>
+                      <h3 className="text-[#8a96ad] text-[12px] font-bold tracking-widest mb-4">ACTIVE THEATERS</h3>
+                      <div className="text-[64px] text-[#c3f5ff] font-bold mb-2 leading-none" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>03</div>
+                      <div className="text-[14px] text-[#00daf3] font-bold mt-4 tracking-wider">SCS-7B, IO-4A, PAC-9</div>
+                    </div>
+                    <div className="flex gap-2 mt-6">
+                      <div className="h-3 flex-1 bg-[rgba(0,218,243,0.3)] rounded-full" />
+                      <div className="h-3 flex-1 bg-[rgba(0,218,243,0.3)] rounded-full" />
+                      <div className="h-3 flex-1 bg-[rgba(0,218,243,0.3)] rounded-full" />
+                    </div>
+                  </div>
+                  <div className="bg-[rgba(10,14,26,0.5)] border border-[rgba(239,68,68,0.3)] rounded-2xl p-8 flex flex-col justify-between hover:border-[rgba(239,68,68,0.6)] transition-colors relative overflow-hidden">
+                    <div className="absolute inset-0 bg-gradient-to-b from-[rgba(239,68,68,0.1)] to-transparent pointer-events-none" />
+                    <div className="relative">
+                      <h3 className="text-[#ef4444] text-[12px] font-bold tracking-widest mb-4">DEFENSE POSTURE</h3>
+                      <div className="text-[42px] text-[#ef4444] font-bold mb-2 leading-tight" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>ELEVATED</div>
+                      <div className="text-[12px] text-[#dce4e5] opacity-80 mt-4 leading-relaxed">Protocol Omega is active due to unidentified contacts in sector 7B. Recommend standby for potential intercept vectors.</div>
+                    </div>
+                    <button className="w-full py-3 bg-[rgba(239,68,68,0.15)] text-[#ef4444] font-bold tracking-widest text-[12px] rounded-xl border border-[rgba(239,68,68,0.4)] hover:bg-[rgba(239,68,68,0.25)] transition-colors mt-6 cursor-pointer relative">REVIEW PROTOCOLS</button>
+                  </div>
+                </div>
+             </div>
+           )}
+           {activeTopTab === 'LOGISTICS' && (
+             <div className="w-full h-full border border-[rgba(59,73,76,0.6)] rounded-3xl flex flex-col p-10 shadow-[0_0_50px_rgba(0,0,0,0.5)] bg-[rgba(10,15,20,0.5)] overflow-hidden">
+                <div className="flex items-center justify-between mb-8">
+                  <h1 className="text-[#c3f5ff] text-[36px] font-bold tracking-[0.1em]" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>SUPPLY & LOGISTICS</h1>
+                  <div className="flex gap-4">
+                    <div className="bg-[rgba(30,40,45,0.6)] px-4 py-2 rounded-lg border border-[rgba(59,73,76,0.5)] text-[#dce4e5] text-[11px] font-bold tracking-widest">TOTAL SUPPLY CARRIERS: {logisticsData.totalSupplyCarriers}</div>
+                    <div className="bg-[rgba(0,255,149,0.1)] px-4 py-2 rounded-lg border border-[rgba(0,255,149,0.3)] text-[#00ff95] text-[11px] font-bold tracking-widest">NETWORK: {logisticsData.networkStatus}</div>
+                  </div>
+                </div>
+                <div className="flex-1 bg-[rgba(10,14,26,0.5)] border border-[rgba(59,73,76,0.6)] rounded-2xl p-6 overflow-hidden flex flex-col">
+                   <div className="overflow-y-auto custom-scrollbar flex-1 pr-4">
+                     <table className="w-full text-left text-[12px] text-[#dce4e5]">
+                       <thead>
+                         <tr className="text-[#8a96ad] tracking-widest border-b border-[rgba(59,73,76,0.5)] sticky top-0 bg-[rgba(10,14,26,0.9)] backdrop-blur-sm z-10">
+                           <th className="pb-4 pt-2 font-bold px-4">VESSEL ID</th>
+                           <th className="pb-4 pt-2 font-bold px-4">STATUS</th>
+                           <th className="pb-4 pt-2 font-bold px-4">FUEL LEVEL</th>
+                           <th className="pb-4 pt-2 font-bold px-4">AMMUNITION</th>
+                           <th className="pb-4 pt-2 font-bold px-4 text-right">MAINTENANCE SCHED</th>
+                         </tr>
+                       </thead>
+                       <tbody>
+                         {logisticsData.vessels.map((v, i) => (
+                           <tr key={i} className="border-b border-[rgba(255,255,255,0.03)] hover:bg-[rgba(255,255,255,0.02)] transition-colors">
+                             <td className="py-5 font-bold tracking-wider px-4 text-[#c3f5ff]">{v.id}</td>
+                             <td className="py-5 px-4"><span className="bg-[rgba(0,255,149,0.15)] text-[#00ff95] px-2 py-1 rounded text-[10px] font-bold tracking-wider">{v.status}</span></td>
+                             <td className="py-5 px-4">
+                               <div className="flex items-center gap-4">
+                                 <div className="w-32 h-1.5 bg-[#192122] rounded-full overflow-hidden shadow-inner"><div className={`h-full ${v.fuel > 40 ? 'bg-[#00ff95]' : 'bg-[#ffb800]'}`} style={{width:`${v.fuel}%`}}/></div>
+                                 <span className="text-[11px] font-bold text-[#8a96ad] w-8">{Math.round(v.fuel)}%</span>
+                               </div>
+                             </td>
+                             <td className="py-5 px-4"><span className="text-[#00daf3] font-bold tracking-widest">{v.ammo}</span></td>
+                             <td className="py-5 px-4 text-right text-[#8a96ad] font-mono">{v.maintenance}</td>
+                           </tr>
+                         ))}
+                       </tbody>
+                     </table>
+                   </div>
+                </div>
+             </div>
+           )}
+           {activeTopTab === 'COMMS' && (
+             <div className="w-full h-full border border-[rgba(59,73,76,0.6)] rounded-3xl flex flex-col p-10 shadow-[0_0_50px_rgba(0,0,0,0.5)] bg-[rgba(10,15,20,0.5)]">
+                <h1 className="text-[#c3f5ff] text-[36px] font-bold tracking-[0.1em] mb-8" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>ENCRYPTED COMMS RELAY</h1>
+                <div className="flex gap-8 flex-1 min-h-0">
+                  <div className="flex-1 bg-[#020817] border border-[rgba(59,73,76,0.6)] rounded-2xl p-8 font-mono text-[13px] leading-relaxed text-[#00ff95] overflow-y-auto custom-scrollbar shadow-inner relative">
+                     <div className="absolute top-4 right-4 text-[10px] bg-[rgba(0,255,149,0.1)] text-[#00ff95] px-3 py-1 rounded-full font-sans font-bold tracking-widest border border-[rgba(0,255,149,0.3)]">{commsData.status}</div>
+                     <div className="opacity-70">&gt; INITIALIZING SECURE HANDSHAKE... OK</div>
+                     <div className="opacity-70">&gt; QUANTUM KEY EXCHANGE... SUCCESS (AES-256-GCM)</div>
+                     <div className="opacity-70">&gt; UPLINK TO SATELLITE NETWORK... ESTABLISHED</div>
+                     
+                     {commsData.logs.map((log, i) => (
+                       <div key={i}>
+                         <div className={`mt-6 font-bold ${log.type === 'incoming' ? 'text-[#00daf3]' : 'text-[#ffb800]'}`}>&gt; {log.type === 'incoming' ? 'INCOMING' : 'OUTGOING'} TRANSMISSION [{log.sender}] : {new Date(log.time).toISOString().slice(11, 19)} UTC</div>
+                         <div className={`text-[#dce4e5] mt-3 pl-5 border-l-2 py-2 rounded-r-lg ${log.type === 'incoming' ? 'border-[rgba(0,218,243,0.5)] bg-[rgba(0,218,243,0.05)]' : 'border-[rgba(255,184,0,0.5)] bg-[rgba(255,184,0,0.05)]'}`}>
+                           "{log.message}"
+                         </div>
+                       </div>
+                     ))}
+                     <div className="mt-6 flex items-center gap-2">
+                       <span className="text-[#00ff95]">&gt; AWAITING INPUT</span>
+                       <span className="w-2.5 h-4 bg-[#00ff95] animate-pulse" />
+                     </div>
+                  </div>
+                  <div className="w-80 flex flex-col gap-6 shrink-0">
+                    <div className="bg-[rgba(10,14,26,0.5)] border border-[rgba(59,73,76,0.6)] rounded-2xl p-6 flex-1">
+                      <h3 className="text-[#8a96ad] text-[11px] font-bold tracking-widest mb-4">ACTIVE CHANNELS</h3>
+                      <div className="flex flex-col gap-3">
+                        {(commsData.activeChannels || []).map((ch, i) => (
+                          <div key={ch} className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-colors ${i===0 ? 'bg-[rgba(0,218,243,0.1)] border-[rgba(0,218,243,0.4)]' : 'bg-[rgba(255,255,255,0.03)] border-transparent hover:border-[rgba(59,73,76,0.6)]'}`}>
+                            <span className={`text-[11px] font-bold tracking-wider ${i===0 ? 'text-[#c3f5ff]' : 'text-[#8a96ad]'}`}>{ch}</span>
+                            <span className="w-2 h-2 rounded-full bg-[#00ff95] shadow-[0_0_8px_rgba(0,255,149,0.8)]" />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+             </div>
+           )}
+        </div>
+      )}
+
+      {/* ── Boundary Guide Panel ── */}
+      {activeTopTab === 'BOUNDARY GRID' && (
+        <div className="absolute top-[88px] left-1/2 -translate-x-1/2 w-[850px] z-20 pointer-events-auto">
+          <div className="backdrop-blur-md bg-[rgba(20,28,31,0.75)] rounded-2xl border border-[rgba(59,73,76,0.5)] overflow-hidden flex flex-col shadow-[0_8px_32px_rgba(0,0,0,0.4)] animate-fade-in p-6 relative">
+             <div className="flex justify-between items-start mb-6 border-b border-[rgba(59,73,76,0.5)] pb-4">
+               <div>
+                 <div className="text-[#c3f5ff] text-[15px] font-bold tracking-[0.02em] uppercase mb-1 font-sans" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
+                   TAMIL NADU MARITIME BOUNDARY GUIDE
+                 </div>
+                 <div className="text-[#8a96ad] text-[11px] font-sans">Fixed-distance offshore zones</div>
+               </div>
+               <div className="flex items-center gap-2">
+                 <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-[#00ff95] shadow-[0_0_8px_#00ff95]' : 'bg-[#ef4444] shadow-[0_0_8px_#ef4444]'}`} />
+                 <span className="text-[#8a96ad] text-[11px] font-sans font-bold">{isConnected ? 'BACKEND ONLINE' : 'BACKEND OFFLINE'}</span>
+               </div>
+             </div>
+
+             <div className="grid grid-cols-2 gap-4 mb-6">
+               {/* Coastline */}
+               <div className="bg-[rgba(10,15,20,0.5)] border border-[rgba(59,73,76,0.4)] rounded-xl p-4 flex flex-col gap-2 shadow-inner">
+                 <div className="flex items-center gap-3">
+                   <div className="w-8 h-0 border-t-2 border-[#00daf3]" />
+                   <span className="text-[#dce4e5] text-[12px] font-bold font-sans">Tamil Nadu Coastline</span>
+                 </div>
+                 <div className="text-[#8a96ad] text-[11px] font-sans pl-11">Baseline reference (shoreline)</div>
+               </div>
+
+               {/* Alert Zone */}
+               <div className="bg-[rgba(10,15,20,0.5)] border border-[rgba(0,255,149,0.3)] rounded-xl p-4 flex flex-col gap-2 shadow-[inset_0_0_15px_rgba(0,255,149,0.05)]">
+                 <div className="flex items-center gap-3">
+                   <div className="w-8 h-0 border-t-2 border-dashed border-[#00ff95]" />
+                   <span className="text-[#00ff95] text-[12px] font-bold font-sans">Alert Zone (20 km)</span>
+                 </div>
+                 <div className="text-[#8a96ad] text-[11px] font-sans pl-11">20 km IMBL monitoring band</div>
+               </div>
+
+               {/* Warning Zone */}
+               <div className="bg-[rgba(10,15,20,0.5)] border border-[rgba(255,184,0,0.4)] rounded-xl p-4 flex flex-col gap-2 shadow-[inset_0_0_15px_rgba(255,184,0,0.05)]">
+                 <div className="flex items-center gap-3">
+                   <div className="w-8 h-0 border-t-2 border-dashed border-[#ffb800]" />
+                   <span className="text-[#ffb800] text-[12px] font-bold font-sans">Warning Zone (12 km)</span>
+                 </div>
+                 <div className="text-[#8a96ad] text-[11px] font-sans pl-11">12 km IMBL caution band</div>
+               </div>
+
+               {/* Danger Zone */}
+               <div className="bg-[rgba(10,15,20,0.5)] border border-[rgba(239,68,68,0.4)] rounded-xl p-4 flex flex-col gap-2 shadow-[inset_0_0_15px_rgba(239,68,68,0.1)] relative overflow-hidden">
+                 <div className="absolute inset-0 bg-gradient-to-r from-[rgba(239,68,68,0.05)] to-transparent pointer-events-none" />
+                 <div className="flex items-center gap-3 relative">
+                   <div className="w-8 h-0 border-t-2 border-dashed border-[#ef4444]" />
+                   <span className="text-[#ef4444] text-[12px] font-bold font-sans">Danger Zone (5 km)</span>
+                 </div>
+                 <div className="text-[#8a96ad] text-[11px] font-sans pl-11 relative">Critical IMBL proximity, turn back immediately</div>
+               </div>
+
+               {/* IMBL Palk Strait */}
+               <div className="bg-[rgba(10,15,20,0.5)] border border-[rgba(59,73,76,0.4)] rounded-xl p-4 flex flex-col gap-2 shadow-inner">
+                 <div className="flex items-center gap-3">
+                   <div className="w-8 h-0 border-t-2 border-[#ef4444]" />
+                   <span className="text-[#dce4e5] text-[12px] font-bold font-sans">IMBL - Palk Strait</span>
+                 </div>
+                 <div className="text-[#8a96ad] text-[11px] font-sans pl-11">International maritime boundary (1974)</div>
+               </div>
+
+               {/* IMBL Gulf of Mannar */}
+               <div className="bg-[rgba(10,15,20,0.5)] border border-[rgba(59,73,76,0.4)] rounded-xl p-4 flex flex-col gap-2 shadow-inner">
+                 <div className="flex items-center gap-3">
+                   <div className="w-8 h-0 border-t-2 border-[#ef4444]" />
+                   <span className="text-[#dce4e5] text-[12px] font-bold font-sans">IMBL - Gulf of Mannar</span>
+                 </div>
+                 <div className="text-[#8a96ad] text-[11px] font-sans pl-11">International maritime boundary (1976)</div>
+               </div>
+             </div>
+
+             {/* Bottom Legend text */}
+             <div className="grid grid-cols-2 gap-4 text-[11px] text-[#8a96ad] font-sans mb-4 px-2 border-t border-[rgba(59,73,76,0.5)] pt-4">
+               <div className="flex items-center gap-3">
+                 <div className="w-6 h-0 border-t-2 border-[#00ff95]" />
+                 <span>Clear ({'>'}20 km from IMBL)</span>
+               </div>
+               <div className="flex items-center gap-3">
+                 <div className="w-6 h-0 border-t-2 border-dashed border-[#00ff95]" />
+                 <span>Alert (12-20 km from IMBL)</span>
+               </div>
+               <div className="flex items-center gap-3">
+                 <div className="w-6 h-0 border-t-2 border-dashed border-[#ffb800]" />
+                 <span>Warning (5-12 km from IMBL)</span>
+               </div>
+               <div className="flex items-center gap-3">
+                 <div className="w-6 h-0 border-t-2 border-dashed border-[#ef4444]" />
+                 <span>Danger ({'<='}5 km from IMBL)</span>
+               </div>
+             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Left Sidebar (Floating Nav) ── */}
+      
+
+      {/* ── Placeholders for Other Tabs ── */}
+      {activeTopTab === 'STRATEGIC' && (
+        <div className="absolute inset-0 z-[5] flex items-center justify-center animate-fade-in pointer-events-none">
+           <div className="text-[#c3f5ff] text-[24px] font-bold tracking-[0.2em] opacity-30" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>STRATEGIC COMMAND OFFLINE</div>
+        </div>
+      )}
+      {activeTopTab === 'LOGISTICS' && (
+        <div className="absolute inset-0 z-[5] flex items-center justify-center animate-fade-in pointer-events-none">
+           <div className="text-[#c3f5ff] text-[24px] font-bold tracking-[0.2em] opacity-30" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>LOGISTICS NETWORK STANDBY</div>
+        </div>
+      )}
+      {activeTopTab === 'COMMS' && (
+        <div className="absolute inset-0 z-[5] flex items-center justify-center animate-fade-in pointer-events-none">
+           <div className="text-[#c3f5ff] text-[24px] font-bold tracking-[0.2em] opacity-30" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>COMMS RELAY SECURE</div>
+        </div>
+      )}
+      
+{activeTopTab === 'TACTICAL' && (
+      <nav className="absolute top-1/2 -translate-y-1/2 left-4 bg-[rgba(8,15,17,0.75)] backdrop-blur-md border border-[rgba(59,73,76,0.5)] rounded-2xl flex flex-col items-center py-5 gap-3 z-20 shadow-[0_8px_32px_rgba(0,0,0,0.4)] w-[68px] pointer-events-auto">
+
+        
+        {navItems.map(({ label, icon }) => (
+          <button key={label} onClick={() => setActiveNav(activeNav === label ? null : label)} title={label}
+            className={`flex items-center justify-center w-11 h-11 rounded-xl transition-all cursor-pointer ${activeNav === label ? 'bg-[#304865] text-[#9eb7d9] shadow-inner border border-[rgba(158,183,217,0.3)]' : 'text-[#bac9cc] hover:text-[#c3f5ff] hover:bg-[rgba(255,255,255,0.06)]'}`}>
+            <span className={activeNav === label ? 'text-[#c3f5ff] scale-110 drop-shadow-[0_0_5px_rgba(195,245,255,0.5)]' : 'text-[#bac9cc]'}>{icon}</span>
+          </button>
+        ))}
+
+        <div className="w-10 h-[1px] bg-[rgba(59,73,76,0.6)] my-3" />
+        <button onClick={() => setDemoMode(d => !d)} title="Demo Mode"
+          className={`w-11 h-11 flex items-center justify-center rounded-xl transition-all cursor-pointer border ${demoMode ? 'bg-[rgba(124,58,237,0.2)] border-[#7c3aed] text-[#a78bfa] shadow-[0_0_20px_rgba(124,58,237,0.4)]' : 'border-transparent text-[#bac9cc] hover:bg-[rgba(255,255,255,0.06)] hover:text-[#c3f5ff]'}`}>
+          {demoMode ? '◉' : '○'}
+        </button>
+      </nav>
+      )}
+
+      {/* ── Left Floating Info Panel ── */}
+      
+
+      {/* ── Placeholders for Other Tabs ── */}
+      {activeTopTab === 'STRATEGIC' && (
+        <div className="absolute inset-0 z-[5] flex items-center justify-center animate-fade-in pointer-events-none">
+           <div className="text-[#c3f5ff] text-[24px] font-bold tracking-[0.2em] opacity-30" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>STRATEGIC COMMAND OFFLINE</div>
+        </div>
+      )}
+      {activeTopTab === 'LOGISTICS' && (
+        <div className="absolute inset-0 z-[5] flex items-center justify-center animate-fade-in pointer-events-none">
+           <div className="text-[#c3f5ff] text-[24px] font-bold tracking-[0.2em] opacity-30" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>LOGISTICS NETWORK STANDBY</div>
+        </div>
+      )}
+      {activeTopTab === 'COMMS' && (
+        <div className="absolute inset-0 z-[5] flex items-center justify-center animate-fade-in pointer-events-none">
+           <div className="text-[#c3f5ff] text-[24px] font-bold tracking-[0.2em] opacity-30" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>COMMS RELAY SECURE</div>
+        </div>
+      )}
+      
+{activeTopTab === 'TACTICAL' && (
+      <div className="absolute top-[88px] left-[100px] bottom-[88px] w-[320px] flex flex-col gap-5 z-20 pointer-events-none">
+        
+        {activeNav === 'Fleet' && (
+          <>
+            {/* Active Fleet */}
+            <div className="pointer-events-auto backdrop-blur-md bg-[rgba(20,28,31,0.75)] rounded-2xl border border-[rgba(59,73,76,0.5)] overflow-hidden flex flex-col max-h-[50%] shadow-[0_8px_32px_rgba(0,0,0,0.4)] animate-fade-in">
+              <div className="bg-[rgba(30,40,45,0.8)] border-b border-[rgba(59,73,76,0.5)] flex items-center justify-between px-5 py-3.5 shrink-0">
+                <span className="text-[#c3f5ff] text-[15px] font-bold tracking-[0.02em]" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>ACTIVE FLEET</span>
+                <span className="bg-[rgba(195,245,255,0.15)] text-[#c3f5ff] text-[10px] font-bold tracking-[0.08em] px-2.5 py-1 rounded">
+                  {String(boats.filter(b => b.status !== 'OFFLINE').length).padStart(2, '0')} UNITS
+                </span>
+              </div>
+              <div className="p-3 flex-1 overflow-y-auto flex flex-col gap-2.5 custom-scrollbar">
+                 <div className="relative mb-1">
+                    <input value={vesselId} onChange={e => setVesselId(e.target.value)}
+                      placeholder="SEARCH ID..."
+                      className="w-full bg-[rgba(10,14,26,0.6)] border border-[rgba(255,255,255,0.08)] rounded-lg px-4 py-2 text-[11px] text-[#dce4e5] outline-none focus:border-[rgba(0,218,243,0.5)] transition-colors" />
+                 </div>
+                 {filteredBoats.length === 0 && <div className="text-[#5a6478] text-[11px] text-center mt-4">No vessels found</div>}
+                 {filteredBoats.map(b => (
+                    <button key={b.boatId} onClick={() => {setSelectedBoat(b); setSelectedBoatId(b.boatId);}}
+                      className={`w-full text-left rounded-lg border transition-all cursor-pointer ${selectedBoatId === b.boatId ? 'bg-[rgba(0,218,243,0.12)] border-[rgba(0,218,243,0.4)] shadow-[inset_0_0_15px_rgba(0,218,243,0.1)]' : 'bg-[rgba(10,15,20,0.5)] border-[rgba(59,73,76,0.4)] hover:border-[rgba(195,245,255,0.3)] hover:bg-[rgba(25,35,40,0.6)]'}`}>
+                      <div className="flex items-center gap-3.5 p-3">
+                        <div className="w-1.5 h-8 rounded-full shrink-0" style={{ background: statusColor(b.status) }} />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[#dce4e5] text-[12px] font-bold tracking-widest truncate">{b.boatId}</span>
+                            <span className="text-[9px] shrink-0 font-semibold tracking-wider" style={{ color: statusColor(b.status) }}>{b.status}</span>
+                          </div>
+                          <div className="text-[#8a96ad] text-[10px] mt-1 truncate">{b.type} | {b.group}</div>
+                        </div>
+                      </div>
+                    </button>
+                 ))}
               </div>
             </div>
 
-            {/* Desktop Advanced Telemetry Panel (Hidden on Mobile) */}
-            <div className="hidden lg:block">
-              <TelemetryPanel
-                boatId={selectedBoat?.boatId || boatId}
-                lat={rawLat}
-                lon={rawLon}
-                speed={rawSpeed}
-                distanceToBoundary={rawDistance}
-                zone={zone}
-              />
+            {/* Telemetry */}
+            <div className="pointer-events-auto backdrop-blur-md bg-[rgba(20,28,31,0.75)] rounded-2xl border border-[rgba(59,73,76,0.5)] p-5 shadow-[0_8px_32px_rgba(0,0,0,0.4)] shrink-0 relative overflow-hidden animate-fade-in">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-[rgba(0,218,243,0.05)] rounded-bl-full pointer-events-none" />
+              <div className="text-[#00daf3] text-[11px] font-bold tracking-widest mb-4 border-b border-[rgba(59,73,76,0.4)] pb-2.5">
+                TELEMETRY — {selectedBoat?.boatId ?? 'NO VESSEL'}
+              </div>
+              <div className="flex flex-col gap-3 text-[11px]">
+                <div className="flex justify-between items-center">
+                  <span className="text-[#8a96ad]">LOCATION</span>
+                  <span className="text-[#c3f5ff] font-medium">{currentLocation.lat.toFixed(3)}°N {currentLocation.lon.toFixed(3)}°E</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-[#8a96ad]">BORDER PROX.</span>
+                  <span style={{ color: proximityToBorder < 5 ? '#ef4444' : '#c3f5ff' }} className={`font-medium ${proximityToBorder < 5 ? 'animate-pulse-dot font-bold' : ''}`}>
+                    {proximityToBorder} KM
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-[#8a96ad]">SPEED</span>
+                  <span className="text-[#c3f5ff] font-medium">{currentSpeed} KN</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-[#8a96ad]">NEAREST EEZ</span>
+                  <span className="text-[#fde047] font-medium">{nearestEEZ}</span>
+                </div>
+                <div className="flex justify-between items-center pt-1 mt-1 border-t border-[rgba(59,73,76,0.3)]">
+                  <span className="text-[#8a96ad]">ZONE</span>
+                  <span className="font-bold text-[12px] tracking-wider" style={{ color: zoneColor(currentZone) }}>{currentZone}</span>
+                </div>
+              </div>
             </div>
+
+            {/* Environmental */}
+            <div className="pointer-events-auto backdrop-blur-md bg-[rgba(20,28,31,0.75)] rounded-2xl border border-[rgba(59,73,76,0.5)] p-4 shadow-[0_8px_32px_rgba(0,0,0,0.4)] shrink-0 animate-fade-in">
+                <div className="text-[#c3f5ff] text-[11px] font-bold tracking-widest mb-3">ENVIRONMENTAL</div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-[rgba(10,15,20,0.5)] border border-[rgba(59,73,76,0.4)] rounded-xl p-3 shadow-inner">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <svg viewBox="0 0 11.67 9.92" className="w-3 h-3 text-[#00daf3] shrink-0"><path d={svgPaths.p33fbcd00} fill="currentColor" /></svg>
+                      <span className="text-[#8a96ad] text-[9px] font-bold tracking-widest">WIND</span>
+                    </div>
+                    <div className="text-[#dce4e5] text-[18px] font-bold" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
+                      {envData.loading ? '...' : Math.round(envData.windSpeed)} <span className="text-[10px] text-[#5a6478] font-normal">KTS</span>
+                    </div>
+                  </div>
+                  <div className="bg-[rgba(10,15,20,0.5)] border border-[rgba(59,73,76,0.4)] rounded-xl p-3 shadow-inner">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <svg viewBox="0 0 11.67 9.74" className="w-3 h-3 text-[#00daf3] shrink-0"><path d={svgPaths.pfc60700} fill="currentColor" /></svg>
+                      <span className="text-[#8a96ad] text-[9px] font-bold tracking-widest">SWELL</span>
+                    </div>
+                    <div className="text-[#dce4e5] text-[18px] font-bold" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
+                      {envData.loading ? '...' : envData.swellHeight.toFixed(1)} <span className="text-[10px] text-[#5a6478] font-normal">M</span>
+                    </div>
+                  </div>
+                </div>
+            </div>
+          </>
+        )}
+
+        {/* ── Sensors Panel ── */}
+        {activeNav === 'Sensors' && (
+          <div className="pointer-events-auto backdrop-blur-md bg-[rgba(20,28,31,0.75)] rounded-2xl border border-[rgba(59,73,76,0.5)] p-6 shadow-[0_8px_32px_rgba(0,0,0,0.4)] flex-1 min-h-0 flex flex-col animate-fade-in">
+            <div className="text-[#c3f5ff] text-[15px] font-bold tracking-[0.02em] mb-6 border-b border-[rgba(59,73,76,0.5)] pb-4" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>SENSOR ARRAYS</div>
+            <div className="flex-1 flex flex-col gap-5 overflow-y-auto custom-scrollbar pr-2">
+              <div className="bg-[rgba(10,15,20,0.5)] border border-[rgba(0,218,243,0.3)] rounded-xl p-5 shadow-[inset_0_0_20px_rgba(0,218,243,0.1)]">
+                 <div className="flex justify-between items-center mb-4">
+                   <div className="text-[#00daf3] text-[12px] font-bold tracking-widest">RADAR NETWORK</div>
+                   <div className="w-2 h-2 rounded-full bg-[#00ff95] animate-pulse" />
+                 </div>
+                 <div className="flex flex-col gap-2">
+                   <div className="flex justify-between text-[11px] text-[#dce4e5] border-b border-[rgba(255,255,255,0.05)] pb-1"><span>STATUS</span><span className="text-[#00ff95] font-bold tracking-wider">ONLINE</span></div>
+                   <div className="flex justify-between text-[11px] text-[#dce4e5] border-b border-[rgba(255,255,255,0.05)] pb-1"><span>SWEEP RATE</span><span className="font-mono">1.2s</span></div>
+                   <div className="flex justify-between text-[11px] text-[#dce4e5] border-b border-[rgba(255,255,255,0.05)] pb-1"><span>RANGE</span><span className="font-mono">450 NM</span></div>
+                   <div className="flex justify-between text-[11px] text-[#dce4e5]"><span>SENSITIVITY</span><span className="font-mono">HIGH</span></div>
+                 </div>
+              </div>
+              <div className="bg-[rgba(10,15,20,0.5)] border border-[rgba(59,73,76,0.4)] rounded-xl p-5 hover:border-[rgba(255,184,0,0.4)] transition-colors">
+                 <div className="flex justify-between items-center mb-4">
+                   <div className="text-[#8a96ad] text-[12px] font-bold tracking-widest">SONAR B-BANDS</div>
+                   <div className="w-2 h-2 rounded-full bg-[#ffb800]" />
+                 </div>
+                 <div className="flex flex-col gap-2">
+                   <div className="flex justify-between text-[11px] text-[#dce4e5] border-b border-[rgba(255,255,255,0.05)] pb-1"><span>STATUS</span><span className="text-[#ffb800] font-bold tracking-wider">DEGRADED</span></div>
+                   <div className="flex justify-between text-[11px] text-[#dce4e5] border-b border-[rgba(255,255,255,0.05)] pb-1"><span>PING INT</span><span className="font-mono">5.0s</span></div>
+                   <div className="flex justify-between text-[11px] text-[#dce4e5] border-b border-[rgba(255,255,255,0.05)] pb-1"><span>THERMOCLINE</span><span className="font-mono">-80m</span></div>
+                   <div className="flex justify-between text-[11px] text-[#dce4e5]"><span>ERROR</span><span className="text-[#ef4444] font-mono">B7-NODE</span></div>
+                 </div>
+              </div>
+              <div className="bg-[rgba(10,15,20,0.5)] border border-[rgba(59,73,76,0.4)] rounded-xl p-5 hover:border-[rgba(0,255,149,0.3)] transition-colors">
+                 <div className="flex justify-between items-center mb-4">
+                   <div className="text-[#8a96ad] text-[12px] font-bold tracking-widest">SATELLITE UPLINK</div>
+                   <div className="w-2 h-2 rounded-full bg-[#00ff95]" />
+                 </div>
+                 <div className="flex flex-col gap-2">
+                   <div className="flex justify-between text-[11px] text-[#dce4e5] border-b border-[rgba(255,255,255,0.05)] pb-1"><span>STATUS</span><span className="text-[#00ff95] font-bold tracking-wider">ONLINE</span></div>
+                   <div className="flex justify-between text-[11px] text-[#dce4e5] border-b border-[rgba(255,255,255,0.05)] pb-1"><span>LATENCY</span><span className="font-mono">42ms</span></div>
+                   <div className="flex justify-between text-[11px] text-[#dce4e5]"><span>BANDWIDTH</span><span className="font-mono">98%</span></div>
+                 </div>
+              </div>
+            </div>
+            <div className="pointer-events-auto backdrop-blur-md bg-[rgba(20,28,31,0.75)] rounded-2xl border border-[rgba(59,73,76,0.5)] p-4 shrink-0 shadow-none border-t border-[rgba(59,73,76,0.5)] rounded-none">
+          <div className="flex items-center justify-between mb-3.5">
+            <span className="text-[#00daf3] text-[10px] font-bold tracking-[0.1em]">SYSTEM STABILITY</span>
+            <span className="text-[#00ff95] text-[11px] font-bold">{systemStability.toFixed(1)}%</span>
+          </div>
+          <div className="flex items-center gap-4 mb-3 text-[10px]">
+            <div className="flex items-center gap-2">
+              <span className="text-[#8a96ad] font-bold tracking-widest">LED</span>
+              <span className="font-bold" style={{ color: isConnected ? '#00ff95' : '#ef4444' }}>{isConnected ? 'ONLINE' : 'OFFLINE'}</span>
+            </div>
+            <div className="w-[1px] h-3 bg-[rgba(59,73,76,0.6)]" />
+            <div className="flex items-center gap-2">
+              <span className="text-[#8a96ad] font-bold tracking-widest">BUZZER</span>
+              <span className="font-bold" style={{ color: currentZone === 'DANGER' ? '#ef4444' : '#bac9cc' }}>{currentZone === 'DANGER' ? 'ACTIVE' : 'STANDBY'}</span>
+            </div>
+          </div>
+          <div className="bg-[rgba(2,8,23,0.6)] h-1.5 rounded-full overflow-hidden shadow-inner">
+            <div className="h-full bg-gradient-to-r from-[#00daf3] to-[#00ff95] transition-all" style={{ width: `${systemStability}%` }} />
           </div>
         </div>
+      </div>
+    )}
 
-        {/* Bottom panels */}
-        <div
-          className={`flex flex-col lg:flex-row px-2 md:px-5 gap-2 md:gap-5 pb-2 md:pb-5 transition-all duration-300 overflow-hidden ${showPanelContent ? 'max-h-[600px] opacity-100' : 'max-h-0 opacity-0 pointer-events-none pb-0'}`}
-        >
-          <div className="flex-1 rounded-md md:rounded-xl p-3 md:p-5 border border-[#1e3a5f]/50 bg-[#0d2137]/70">
-            <h2 className="text-xs md:text-sm font-bold text-cyan-400 mb-3 md:mb-4 uppercase tracking-widest">
-              Vessels by Zone
-            </h2>
-            <div className="grid grid-cols-3 gap-2 md:gap-3">
-              <ZoneCount
-                zone="SAFE"
-                count={safeCount}
-                active={zone === 'ALERT' || zone === 'CLEAR'}
-              />
-              <ZoneCount
-                zone="WARNING"
-                count={warningCount}
-                active={zone === 'WARNING'}
-              />
-              <ZoneCount
-                zone="DANGER"
-                count={dangerCount}
-                active={zone === 'DANGER'}
-              />
-            </div>
-          </div>
-
-          <div className="lg:w-80 xl:w-96 rounded-xl p-5 border border-[#1e3a5f]/50 bg-[#0d2137]/70">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-bold text-cyan-400 uppercase tracking-widest">
-                Zone Change Log
-              </h2>
-              <span className="text-sm text-gray-600">
-                {displayAlerts.length} events
+    {/* ── Threats Panel (Vessels By Zone) ── */}
+        {activeNav === 'Threats' && (
+          <div className="pointer-events-auto backdrop-blur-md bg-[rgba(20,28,31,0.75)] rounded-2xl border border-[rgba(59,73,76,0.5)] overflow-hidden flex flex-col shadow-[0_8px_32px_rgba(0,0,0,0.4)] animate-fade-in relative my-auto min-h-[420px]">
+            <div className="bg-[rgba(30,40,45,0.8)] border-b border-[rgba(59,73,76,0.5)] flex items-center justify-between px-5 py-3.5 shrink-0">
+              <span className="text-[#c3f5ff] text-[15px] font-bold tracking-[0.02em]" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>VESSELS BY ZONE</span>
+              <span className="bg-[rgba(195,245,255,0.15)] text-[#c3f5ff] text-[10px] font-bold tracking-[0.08em] px-2.5 py-1 rounded">
+                {boats.length} UNITS
               </span>
             </div>
-            <div className="overflow-y-auto max-h-48 pr-1">
-              {displayAlerts.map((a, i) => (
-                <AlertRow key={i} alert={a} />
+             
+             <div className="flex flex-col justify-center gap-4 p-5 flex-1">
+               {/* SAFE Card */}
+               <div className="bg-[rgba(10,15,20,0.5)] border border-[rgba(0,255,149,0.3)] rounded-xl p-4 flex items-center justify-between shadow-[inset_0_0_20px_rgba(0,255,149,0.05)]">
+                 <div className="flex items-center gap-4">
+                   <div className="w-8 h-8 rounded-full border border-[rgba(0,255,149,0.4)] flex items-center justify-center">
+                     <div className="w-3 h-3 rounded-full bg-[#00ff95] shadow-[0_0_8px_#00ff95]" />
+                   </div>
+                   <div className="flex flex-col">
+                     <span className="text-[#00ff95] text-[12px] font-bold tracking-widest font-sans">SAFE</span>
+                     <span className="text-[#8a96ad] text-[10px] font-sans">Nominal operations</span>
+                   </div>
+                 </div>
+                 <span className="text-[#00ff95] text-[36px] font-bold leading-none font-sans" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
+                   {boats.filter(b => b.zone === 'SAFE' || b.zone === 'CLEAR').length}
+                 </span>
+               </div>
+
+               {/* WARNING Card */}
+               <div className="bg-[rgba(10,15,20,0.5)] border border-[rgba(255,184,0,0.4)] rounded-xl p-4 flex items-center justify-between shadow-[inset_0_0_20px_rgba(255,184,0,0.05)] hover:border-[rgba(255,184,0,0.6)] transition-colors">
+                 <div className="flex items-center gap-4">
+                   <div className="w-8 h-8 rounded-full border border-[rgba(255,184,0,0.4)] flex items-center justify-center">
+                     <div className="w-3 h-3 rounded-full bg-[#ffb800] shadow-[0_0_8px_#ffb800]" />
+                   </div>
+                   <div className="flex flex-col">
+                     <span className="text-[#ffb800] text-[12px] font-bold tracking-widest font-sans">WARNING</span>
+                     <span className="text-[#8a96ad] text-[10px] font-sans">Approaching IMBL</span>
+                   </div>
+                 </div>
+                 <span className="text-[#ffb800] text-[36px] font-bold leading-none font-sans" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
+                   {boats.filter(b => b.zone === 'WARNING' || b.zone === 'ALERT').length}
+                 </span>
+               </div>
+
+               {/* DANGER Card */}
+               <div className="bg-[rgba(10,15,20,0.5)] border border-[rgba(239,68,68,0.5)] rounded-xl p-4 flex items-center justify-between shadow-[inset_0_0_20px_rgba(239,68,68,0.1)] relative overflow-hidden">
+                 <div className="absolute inset-0 bg-gradient-to-r from-[rgba(239,68,68,0.1)] to-transparent pointer-events-none" />
+                 <div className="flex items-center gap-4 relative">
+                   <div className="w-8 h-8 rounded-full border border-[rgba(239,68,68,0.6)] flex items-center justify-center bg-[rgba(239,68,68,0.1)]">
+                     <div className="w-3 h-3 rounded-full bg-[#ef4444] shadow-[0_0_12px_#ef4444] animate-pulse" />
+                   </div>
+                   <div className="flex flex-col">
+                     <span className="text-[#ef4444] text-[12px] font-bold tracking-widest font-sans">DANGER</span>
+                     <span className="text-[#8a96ad] text-[10px] font-sans">Immediate action required</span>
+                   </div>
+                 </div>
+                 <span className="text-[#ef4444] text-[36px] font-bold leading-none font-sans relative" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
+                   {boats.filter(b => b.zone === 'DANGER').length}
+                 </span>
+               </div>
+             </div>
+          </div>
+        )}
+
+        {/* ── Logs Panel ── */}
+        {activeNav === 'Logs' && (
+          <div className="pointer-events-auto backdrop-blur-md bg-[rgba(20,28,31,0.75)] rounded-2xl border border-[rgba(59,73,76,0.5)] overflow-hidden flex flex-col flex-1 min-h-[400px] shadow-[0_8px_32px_rgba(0,0,0,0.4)] animate-fade-in">
+            <div className="bg-[rgba(30,40,45,0.8)] border-b border-[rgba(59,73,76,0.5)] flex items-center justify-between px-5 py-3.5 shrink-0">
+              <span className="text-[#c3f5ff] text-[15px] font-bold tracking-[0.02em]" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>TACTICAL LOG</span>
+              <svg viewBox="0 0 10.5 10.5" className="w-3.5 h-3.5 text-[#8a96ad]"><path d={svgPaths.p1c1607c0} fill="currentColor" /></svg>
+            </div>
+            <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-4 min-h-0 custom-scrollbar">
+              {alerts.length === 0 && <div className="text-[#5a6478] text-[11px] text-center py-4">No recent events</div>}
+              {alerts.map((a, i) => (
+                <div key={a.id} className={`relative pl-4 py-1 transition-opacity ${i >= 5 ? 'opacity-40' : ''}`}>
+                  <div className="absolute left-0 top-0 bottom-0 w-1 rounded-full" style={{ background: a.level === 'danger' ? '#ef4444' : a.level === 'warning' ? '#ffb800' : '#00daf3' }} />
+                  <div className="text-[10px] font-bold mb-1 tracking-wider" style={{ color: a.level === 'danger' ? '#ef4444' : a.level === 'warning' ? '#ffb800' : '#00daf3' }}>{a.time}</div>
+                  <div className="text-[#dce4e5] text-[11px] leading-relaxed">{a.message}</div>
+                </div>
               ))}
             </div>
+            </div>
+        )}
+      </div>
+      )}
+
+      {/* ── Floating Bottom Bar ── */}
+      
+
+      {/* ── Placeholders for Other Tabs ── */}
+      {activeTopTab === 'STRATEGIC' && (
+        <div className="absolute inset-0 z-[5] flex items-center justify-center animate-fade-in pointer-events-none">
+           <div className="text-[#c3f5ff] text-[24px] font-bold tracking-[0.2em] opacity-30" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>STRATEGIC COMMAND OFFLINE</div>
+        </div>
+      )}
+      {activeTopTab === 'LOGISTICS' && (
+        <div className="absolute inset-0 z-[5] flex items-center justify-center animate-fade-in pointer-events-none">
+           <div className="text-[#c3f5ff] text-[24px] font-bold tracking-[0.2em] opacity-30" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>LOGISTICS NETWORK STANDBY</div>
+        </div>
+      )}
+      {activeTopTab === 'COMMS' && (
+        <div className="absolute inset-0 z-[5] flex items-center justify-center animate-fade-in pointer-events-none">
+           <div className="text-[#c3f5ff] text-[24px] font-bold tracking-[0.2em] opacity-30" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>COMMS RELAY SECURE</div>
+        </div>
+      )}
+      
+{activeTopTab === 'TACTICAL' && (
+      <footer className="absolute bottom-4 left-1/2 -translate-x-1/2 h-[42px] bg-[rgba(8,15,17,0.85)] backdrop-blur-md border border-[rgba(59,73,76,0.6)] rounded-full px-8 flex items-center gap-6 text-[10px] text-[#8a96ad] z-20 shadow-[0_8px_32px_rgba(0,0,0,0.4)] pointer-events-auto">
+        <span className="text-[#c3f5ff] font-bold tracking-[0.1em]">AEGIS COMMAND V4.2</span>
+        <span className="text-[rgba(59,73,76,0.4)]">|</span>
+        <span className="text-[#00ff95] font-semibold tracking-widest">● SYSTEM STABLE</span>
+        <span className="text-[rgba(59,73,76,0.4)]">|</span>
+        
+        {/* Indicators */}
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] tracking-widest font-bold">LED</span>
+            <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-[#00ff95] shadow-[0_0_8px_#00ff95]' : 'bg-[#ef4444] shadow-[0_0_8px_#ef4444]'}`} />
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] tracking-widest font-bold">BUZZER</span>
+            <div className={`w-2 h-2 rounded-full ${currentZone === 'DANGER' ? 'bg-[#ef4444] shadow-[0_0_8px_#ef4444] animate-pulse' : 'bg-[rgba(255,255,255,0.2)]'}`} />
           </div>
         </div>
+        <span className="text-[rgba(59,73,76,0.4)]">|</span>
+        
+        <span className="tracking-widest">UPTIME: {lastUpdate}</span>
+        <span className="text-[rgba(59,73,76,0.4)]">|</span>
+        <span className="text-[#00daf3] font-semibold tracking-widest cursor-pointer hover:text-white transition-colors">LIVE FEEDS</span>
+      </footer>
+      )}
 
-        {/* Legend + Footer */}
-        <div
-          className={`px-2 md:px-5 pb-2 md:pb-5 transition-all duration-300 ${showPanelContent ? (showBoundaryMenu ? 'max-h-[760px] opacity-100 overflow-visible' : 'max-h-[360px] opacity-100 overflow-hidden') : 'max-h-0 opacity-0 pointer-events-none pb-0 overflow-hidden'}`}
-        >
-          <div className="flex flex-col gap-2 md:gap-3 rounded-md md:rounded-xl p-2 md:p-3 border border-[#1e3a5f]/30 bg-[#0d2137]/40 relative overflow-visible">
-            <div className="flex flex-wrap items-center gap-x-2 md:gap-x-4 gap-y-1 md:gap-y-1.5">
-              <button
-                onClick={() => setShowBoundaryMenu((prev) => !prev)}
-                className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold uppercase tracking-wider border border-cyan-500/40 text-cyan-300 bg-[#0a1e33] hover:bg-[#102742] transition-colors"
-              >
-                <span className="w-2 h-2 rounded-full bg-cyan-400" />
-                Boundary Guide
-                <span className="text-cyan-500">
-                  {showBoundaryMenu ? 'Close' : 'Open'}
-                </span>
+      {/* ── Toast Notifications ── */}
+      <div className="fixed top-4 right-4 z-[3000] flex flex-col gap-2 pointer-events-none">
+        {toasts.map(t => (
+          <div key={t.id} className="animate-slide-in bg-[rgba(10,14,26,0.92)] border rounded-xl px-5 py-4 text-[12px] backdrop-blur-md pointer-events-auto shadow-2xl"
+            style={{ borderColor: zoneColor(t.zone), color: zoneColor(t.zone) }}>
+            <span className="font-bold mr-2 text-[14px]">⚡ ZONE CHANGE</span>
+            <div className="mt-1 text-[#dce4e5] opacity-90">{t.message}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Danger Modal ── */}
+      {showDangerModal && (
+        <div className="fixed inset-0 z-[3200] bg-[rgba(0,0,0,0.85)] flex items-center justify-center animate-fade-in backdrop-blur-md pointer-events-auto">
+          <div className="bg-[rgba(10,15,20,0.95)] border border-[#ef4444] rounded-2xl p-8 max-w-md w-full mx-4 animate-danger-pulse shadow-[0_0_50px_rgba(239,68,68,0.3)]">
+            <div className="flex items-center gap-4 mb-4">
+               <div className="w-12 h-12 rounded-full bg-[rgba(239,68,68,0.15)] flex items-center justify-center text-[#ef4444] text-[24px]">⚠</div>
+               <div className="text-[#ef4444] text-[22px] font-bold" style={{ fontFamily: "'Space Grotesk', sans-serif", letterSpacing: '0.04em' }}>
+                 DANGER ZONE BREACH
+               </div>
+            </div>
+            <div className="text-[#dce4e5] text-[13px] mb-8 leading-relaxed opacity-90">
+              A vessel has entered a DANGER zone. Immediate operator action required. Verify vessel identity and initiate emergency protocols.
+            </div>
+            <div className="flex gap-4">
+              <button onClick={() => setShowDangerModal(false)}
+                className="flex-1 py-3.5 bg-[#ef4444] text-white text-[12px] font-bold rounded-xl hover:bg-[#dc2626] tracking-widest cursor-pointer shadow-[0_4px_15px_rgba(239,68,68,0.4)] transition-all">
+                ACKNOWLEDGE
+              </button>
+              <button onClick={() => { addAlert('Emergency recall signal transmitted.', 'danger'); setShowDangerModal(false) }}
+                className="flex-1 py-3.5 bg-[rgba(239,68,68,0.1)] border border-[#ef4444] text-[#ef4444] text-[12px] font-bold rounded-xl hover:bg-[rgba(239,68,68,0.2)] tracking-widest cursor-pointer transition-all">
+                RECALL ALL
               </button>
             </div>
-
-            {showBoundaryMenu && (
-              <div className="mt-3 rounded-xl border border-cyan-500/30 bg-[#071525]/95 backdrop-blur-md p-4 shadow-[0_12px_40px_rgba(0,0,0,0.45)] z-20">
-                <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
-                  <div>
-                    <h3 className="text-sm font-bold uppercase tracking-widest text-cyan-300">
-                      Tamil Nadu Maritime Boundary Guide
-                    </h3>
-                    <p className="text-xs text-gray-500 mt-1">
-                      Fixed-distance offshore zones
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-1.5 text-sm text-gray-400">
-                    <div
-                      className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-400 animate-pulse' : 'bg-red-500'}`}
-                    />
-                    <span>{serverStatus}</span>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
-                  <BoundaryGuideItem
-                    color="#06b6d4"
-                    title="Tamil Nadu Coastline"
-                    subtitle="Baseline reference (shoreline)"
-                  />
-                  <BoundaryGuideItem
-                    color="#22c55e"
-                    title="Alert Zone (20 km)"
-                    subtitle="20 km IMBL monitoring band"
-                    dashed
-                  />
-                  <BoundaryGuideItem
-                    color="#f59e0b"
-                    title="Warning Zone (12 km)"
-                    subtitle="12 km IMBL caution band"
-                    dashed
-                  />
-                  <BoundaryGuideItem
-                    color="#f97316"
-                    title="Danger Zone (5 km)"
-                    subtitle="Critical IMBL proximity, turn back immediately"
-                    dashed
-                  />
-                  <BoundaryGuideItem
-                    color="#ef4444"
-                    title="IMBL - Palk Strait"
-                    subtitle="International maritime boundary (1974)"
-                    dashed
-                  />
-                  <BoundaryGuideItem
-                    color="#ef4444"
-                    title="IMBL - Gulf of Mannar"
-                    subtitle="International maritime boundary (1976)"
-                    dashed
-                  />
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
-                  <LegendItem
-                    color="#22c55e"
-                    label="Clear (>20 km from IMBL)"
-                  />
-                  <LegendItem
-                    color="#22c55e"
-                    label="Alert (12-20 km from IMBL)"
-                    dashed
-                  />
-                  <LegendItem
-                    color="#f59e0b"
-                    label="Warning (5-12 km from IMBL)"
-                    dashed
-                  />
-                  <LegendItem
-                    color="#f97316"
-                    label="Danger (<=5 km from IMBL)"
-                    dashed
-                  />
-                </div>
-
-                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-sm text-gray-400">
-                  <span>Boundary Guide Open</span>
-                </div>
-              </div>
-            )}
-
-            <div className="mt-2 pt-2 border-t border-[#1e3a5f]/30 flex items-center justify-between text-xs text-gray-500">
-              <span>&copy; 2026 Maritime Safety Authority</span>
-            </div>
           </div>
         </div>
-      </div>
-    </div>
-  );
-}
+      )}
 
-// Sub-components
+      {/* ── Zone Alert Banner ── */}
+      {(currentZone === 'WARNING' || currentZone === 'DANGER' || currentZone === 'ALERT') && (
+        <div className="absolute top-[80px] left-[460px] right-[460px] py-2.5 text-[11px] font-bold tracking-[0.08em] flex items-center justify-center gap-3 shrink-0 z-20 rounded-full border shadow-[0_4px_20px_rgba(0,0,0,0.5)] backdrop-blur-md pointer-events-none transition-all"
+          style={{ background: zoneBg(currentZone), color: zoneColor(currentZone), borderColor: `${zoneColor(currentZone)}60` }}>
+          <span className="animate-pulse-dot text-[14px]">●</span>
+          {currentZone === 'DANGER' ? 'CRITICAL: Vessel in DANGER zone — initiate emergency protocols immediately' :
+           currentZone === 'WARNING' ? 'WARNING: Vessel approaching restricted boundary — reduce speed and alter course' :
+           'ALERT: Vessel in proximity alert zone — monitor boundary distance'}
+        </div>
+      )}
 
-function MetricCard({ label, value, accent, icon, alert }) {
-  const cfg = {
-    cyan: {
-      border: 'rgba(6,182,212,0.3)',
-      glow: 'rgba(6,182,212,0.12)',
-      text: 'text-cyan-300',
-      iconBg: 'from-cyan-500 to-teal-600',
-    },
-    green: {
-      border: 'rgba(34,197,94,0.3)',
-      glow: 'rgba(34,197,94,0.12)',
-      text: 'text-green-300',
-      iconBg: 'from-green-500 to-teal-600',
-    },
-    red: {
-      border: 'rgba(239,68,68,0.4)',
-      glow: 'rgba(239,68,68,0.2)',
-      text: 'text-red-300',
-      iconBg: 'from-red-500 to-red-700',
-    },
-    amber: {
-      border: 'rgba(245,158,11,0.3)',
-      glow: 'rgba(245,158,11,0.12)',
-      text: 'text-amber-300',
-      iconBg: 'from-amber-500 to-orange-600',
-    },
-  }[accent];
-  return (
-    <div
-      className={`flex items-center gap-3 p-5 rounded-xl w-full transition-all duration-300 ${alert ? 'animate-pulse' : ''}`}
-      style={{
-        background: 'linear-gradient(135deg, #0f2d4e 0%, #0a1e33 100%)',
-        boxShadow: `0 4px 16px ${cfg.glow}`,
-        border: `1px solid ${cfg.border}`,
-      }}
-    >
-      <div
-        className={`w-11 h-11 rounded-lg flex items-center justify-center flex-shrink-0 bg-gradient-to-br ${cfg.iconBg}`}
-      >
-        {icon}
-      </div>
-      <div className="min-w-0 flex-1">
-        <p className="text-xs text-gray-400 uppercase tracking-wider leading-none mb-1">
-          {label}
-        </p>
-        <p className={`text-base font-mono font-semibold ${cfg.text} truncate`}>
-          {value}
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function OverlayStat({ label, value, color }) {
-  return (
-    <div className="text-center">
-      <p className="text-xs text-gray-500 uppercase tracking-wider mb-1 leading-none">
-        {label}
-      </p>
-      <p className={`text-base font-mono font-medium ${color} truncate`}>
-        {value}
-      </p>
-    </div>
-  );
-}
-
-function ZoneCount({ zone, count, active }) {
-  const cfg = ZONE_CONFIG[zone];
-  return (
-    <div
-      className={`flex flex-col items-center justify-center gap-2 rounded-xl border p-5 ${cfg.border} ${active ? cfg.activeBg : ''} transition-all`}
-      style={{ boxShadow: active ? `0 0 20px rgba(${cfg.glow},0.2)` : 'none' }}
-    >
-      <div
-        className={`w-8 h-8 rounded-full border-2 ${cfg.border} flex items-center justify-center ${active ? 'animate-pulse' : ''}`}
-      >
-        <span className={`w-3.5 h-3.5 rounded-full ${cfg.dot}`} />
-      </div>
-      <p className={`text-sm font-bold uppercase tracking-widest ${cfg.text}`}>
-        {zone}
-      </p>
-      <p className={`text-4xl font-black leading-none ${cfg.text}`}>{count}</p>
-      <p className="text-sm text-gray-500">
-        {count === 1 ? 'vessel' : 'vessels'}
-      </p>
-    </div>
-  );
-}
-
-function AlertRow({ alert }) {
-  const dotColor =
-    alert.zone === 'DANGER'
-      ? 'bg-red-400'
-      : alert.zone === 'WARNING'
-        ? 'bg-yellow-400'
-        : 'bg-green-400';
-  const textColor =
-    alert.zone === 'DANGER'
-      ? 'text-red-400'
-      : alert.zone === 'WARNING'
-        ? 'text-yellow-400'
-        : 'text-green-400';
-  return (
-    <div className="flex items-center gap-2.5 py-2 border-b border-[#1e3a5f]/20 last:border-0">
-      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${dotColor}`} />
-      <span className={`text-sm font-bold w-20 flex-shrink-0 ${textColor}`}>
-        {alert.zone}
-      </span>
-      <span className="text-sm text-gray-500 flex-1 truncate">
-        {alert.lat?.toFixed(4)}&deg;N, {alert.lon?.toFixed(4)}&deg;E
-      </span>
-      <span className="text-sm text-gray-600 flex-shrink-0 whitespace-nowrap">
-        {formatRelativeTime(alert.timestamp)}
-      </span>
-    </div>
-  );
-}
-
-function LegendItem({ color, label, dashed }) {
-  return (
-    <span className="flex items-center gap-1.5 text-sm text-gray-400">
-      <span
-        className="inline-block w-6 h-0.5 rounded flex-shrink-0"
-        style={{
-          background: dashed
-            ? `repeating-linear-gradient(90deg,${color} 0,${color} 4px,transparent 4px,transparent 7px)`
-            : color,
-        }}
-      />
-      {label}
-    </span>
-  );
-}
-
-function BoundaryGuideItem({ color, title, subtitle, dashed }) {
-  return (
-    <div className="rounded-lg border border-[#1e3a5f]/40 bg-[#0b1d32]/80 p-3">
-      <div className="flex items-center gap-2 mb-1.5">
-        <span
-          className="inline-block w-8 h-0.5 rounded flex-shrink-0"
-          style={{
-            background: dashed
-              ? `repeating-linear-gradient(90deg,${color} 0,${color} 4px,transparent 4px,transparent 7px)`
-              : color,
-          }}
-        />
-
-        <span className="text-sm font-semibold text-gray-100">{title}</span>
-      </div>
-      <p className="text-sm text-gray-400">{subtitle}</p>
     </div>
   );
 }

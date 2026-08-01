@@ -9,7 +9,6 @@ import LogsPage from './logs/page';
 export default function App() {
   return (
     <BrowserRouter>
-      <TopNav />
       <Suspense fallback={<div>Loading...</div>}>
         <Routes>
           <Route path="/" element={<RootPage />} />
