@@ -828,12 +828,12 @@ export default function LeafletMap({
     ).addTo(mapInstanceRef.current);
 
     // Add GEBCO Color Bathymetry WMS Layer
-    bathymetryLayerRef.current = L.tileLayer.wms('https://ows.emodnet-bathymetry.eu/wms?', {
-      layers: 'emodnet:mean_rainbowcolour,emodnet:contours',
+    bathymetryLayerRef.current = L.tileLayer.wms('https://wms.gebco.net/mapserv?', {
+      layers: 'GEBCO_Latest_2',
       format: 'image/png',
       transparent: true,
-      opacity: 0.7,
-      attribution: '&copy; EMODnet Bathymetry Consortium',
+      opacity: 0.65,
+      attribution: '&copy; GEBCO',
     });
     if (showBathymetry) {
       bathymetryLayerRef.current.addTo(mapInstanceRef.current);
