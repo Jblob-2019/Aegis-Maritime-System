@@ -32,10 +32,12 @@ jobs:
           node-version: "22"
           cache: npm
           
-      - name: Install dependencies
+      - name: Install app dependencies
+        working-directory: ./apps/dashboard-next
         run: npm ci
         
       - name: Build frontend
+        working-directory: ./apps/dashboard-next
         run: npm run build
         
       - name: Setup Pages
