@@ -69,7 +69,7 @@ export default function LoginPage() {
       <div className="absolute h-[1px] w-full bg-[rgba(59,73,76,0.2)] bottom-1/4 pointer-events-none" />
 
       {/* Glassmorphism Card */}
-      <div className="max-w-md w-full bg-[rgba(10,15,20,0.85)] backdrop-blur-xl border border-[rgba(59,73,76,0.6)] rounded-2xl shadow-[0_15px_50px_rgba(0,0,0,0.6)] p-10 relative z-10 animate-fade-in">
+      <div className="max-w-md w-full hud-panel-intense p-10 relative z-10 animate-fade-in">
         <div className="text-center mb-10">
           <div className="flex justify-center items-center gap-3 mb-4">
             <span className="w-2.5 h-2.5 bg-[#00ff95] rounded-full animate-pulse shadow-[0_0_12px_rgba(0,255,149,0.8)]" />

@@ -27,6 +27,43 @@ function nowHm() {
   const d = new Date();
   return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
 }
+function fmtDate(ts) {
+  try {
+    return new Intl.DateTimeFormat('en-GB', { dateStyle: 'short', timeStyle: 'medium', timeZone: 'UTC' }).format(new Date(ts)) + ' UTC';
+  } catch { return ts; }
+}
+
+const ZONE_DOT = { SAFE: 'bg-[#00ff95]', WARNING: 'bg-[#ffb800]', DANGER: 'bg-[#ef4444]' };
+const ZONE_BADGE = {
+  SAFE: 'bg-[rgba(0,255,149,0.15)] border-[rgba(0,255,149,0.3)] text-[#00ff95]',
+  WARNING: 'bg-[rgba(255,184,0,0.15)] border-[rgba(255,184,0,0.3)] text-[#ffb800]',
+  DANGER: 'bg-[rgba(239,68,68,0.15)] border-[rgba(239,68,68,0.3)] text-[#ef4444]',
+};
+
+function ZoneBadge({ zone }) {
+  if (!zone) return <span className="text-[#8a96ad]">—</span>;
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded border text-[10px] font-bold tracking-widest ${ZONE_BADGE[zone] ?? 'bg-[rgba(255,255,255,0.05)] border-[rgba(255,255,255,0.1)] text-[#8a96ad]'}`}>
+      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${ZONE_DOT[zone] ?? 'bg-[#8a96ad]'} ${zone === 'WARNING' || zone === 'DANGER' ? 'animate-pulse' : ''}`} />
+      {zone}
+    </span>
+  );
+}
+
+function EmptyRow({ cols, loading }) {
+  return (
+    <tr>
+      <td colSpan={cols} className="px-4 py-14 text-center text-[#5a6478] text-[11px] font-bold tracking-widest">
+        {loading ? (
+          <div className="flex items-center justify-center gap-2">
+            <svg className="w-4 h-4 text-[#00daf3] animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+            <span>FETCHING RECORDS...</span>
+          </div>
+        ) : 'NO RECORDS FOUND'}
+      </td>
+    </tr>
+  );
+}
 
 // ── Main App ──────────────────────────────────────────────────────────────────
 
@@ -60,6 +97,14 @@ export default function MaritimeDashboard() {
   const [lastUpdate, setLastUpdate] = useState(nowHm());
   const [rawDistance, setRawDistance] = useState(99);
   const [envData, setEnvData] = useState({ windSpeed: 18, swellHeight: 2.4, loading: true });
+  
+  // Detailed Logs State
+  const [logsActiveTab, setLogsActiveTab] = useState('movement');
+  const [historyMovements, setHistoryMovements] = useState([]);
+  const [historyZoneEvents, setHistoryZoneEvents] = useState([]);
+  const [boatFilter, setBoatFilter] = useState('');
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [logsError, setLogsError] = useState(null);
   
   const previousZoneRef = useRef('UNKNOWN');
 
@@ -115,6 +160,35 @@ export default function MaritimeDashboard() {
     const interval = setInterval(fetchEnv, 300000); // 5 minutes
     return () => { active = false; clearInterval(interval); };
   }, []);
+
+  // Detailed Logs fetcher
+  const fetchLogsData = useCallback(async () => {
+    setLogsLoading(true);
+    setLogsError(null);
+    try {
+      const BACKEND = getRuntimeEnv().NEXT_PUBLIC_BACKEND_URL || 'http://localhost:4000';
+      const token = localStorage.getItem('token');
+      const headers = { Authorization: `Bearer ${token}` };
+      const qs = boatFilter.trim() ? `?boatId=${encodeURIComponent(boatFilter.trim())}` : '';
+      const [movRes, alertRes] = await Promise.all([
+        fetch(`${BACKEND}/api/location/history${qs}`, { headers }),
+        fetch(`${BACKEND}/api/alerts${qs}`, { headers }),
+      ]);
+      if (movRes.ok) setHistoryMovements(await movRes.json());
+      if (alertRes.ok) setHistoryZoneEvents(await alertRes.json());
+    } catch {
+      setLogsError('SYSTEM OFFLINE');
+    } finally {
+      setLogsLoading(false);
+    }
+  }, [boatFilter]);
+
+  useEffect(() => {
+    if (activeTopTab === 'DETAILED LOGS') {
+      const id = setTimeout(fetchLogsData, boatFilter ? 400 : 0);
+      return () => clearTimeout(id);
+    }
+  }, [fetchLogsData, boatFilter, activeTopTab]);
 
   // Backend Integration hooks
   const handleLocationUpdate = useCallback((lat, lng) => {
@@ -298,7 +372,7 @@ export default function MaritimeDashboard() {
     { label: 'Sensors', icon: <svg viewBox="0 0 20 20" className="w-5 h-5"><path d={svgPaths.pb4d1000} fill="currentColor" /></svg> },
     { label: 'Threats', icon: <svg viewBox="0 0 22 19" className="w-[22px] h-[19px]"><path d={svgPaths.p7555480} fill="currentColor" /></svg> },
     { label: 'Weather', icon: <svg viewBox="0 0 22 16" className="w-[22px] h-[16px]"><path d={svgPaths.pebcf900} fill="currentColor" /></svg> },
-    { label: 'Logs', icon: <svg viewBox="0 0 24 24" className="w-[19px] h-[20px]"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z" fill="currentColor"/></svg> },
+    { label: 'Live Feed', icon: <svg viewBox="0 0 24 24" className="w-[19px] h-[20px]"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z" fill="currentColor"/></svg> },
   ];
 
   const alertLevel = boats.reduce((worst, b) => {
@@ -338,8 +412,8 @@ export default function MaritimeDashboard() {
           AEGIS MARITIME COMMAND
         </span>
         <div className="flex items-center gap-1.5">
-          {['TACTICAL', 'BOUNDARY GRID', 'LOGISTICS', 'COMMS'].map(tab => (
-            <button key={tab} onClick={() => setActiveTopTab(tab)} className={`px-4 py-1.5 text-[11px] tracking-widest rounded-md transition-all cursor-pointer ${activeTopTab === tab ? 'text-[#c3f5ff] bg-[rgba(195,245,255,0.08)] font-semibold shadow-inner' : 'text-[#bac9cc] hover:text-[#dce4e5] hover:bg-[rgba(255,255,255,0.04)]'}`}>
+          {['TACTICAL', 'BOUNDARY GRID', 'LOGISTICS', 'COMMS', 'DETAILED LOGS'].map(tab => (
+            <button key={tab} onClick={() => setActiveTopTab(tab)} className={`px-4 py-1.5 text-[11px] tracking-widest rounded-md transition-all cursor-pointer ${activeTopTab === tab ? 'text-[#c3f5ff] bg-[rgba(195,245,255,0.08)] font-semibold shadow-inner border border-[rgba(0,218,243,0.3)]' : 'text-[#bac9cc] border border-transparent hover:text-[#dce4e5] hover:bg-[rgba(255,255,255,0.04)]'}`}>
               {tab}
             </button>
           ))}
@@ -964,7 +1038,7 @@ export default function MaritimeDashboard() {
         )}
 
         {/* ── Logs Panel ── */}
-        {activeNav === 'Logs' && (
+        {activeNav === 'Live Feed' && (
           <div className="pointer-events-auto backdrop-blur-md bg-[rgba(20,28,31,0.75)] rounded-2xl border border-[rgba(59,73,76,0.5)] overflow-hidden flex flex-col flex-1 min-h-[400px] shadow-[0_8px_32px_rgba(0,0,0,0.4)] animate-fade-in">
             <div className="bg-[rgba(30,40,45,0.8)] border-b border-[rgba(59,73,76,0.5)] flex items-center justify-between px-5 py-3.5 shrink-0">
               <span className="text-[#c3f5ff] text-[15px] font-bold tracking-[0.02em]" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>TACTICAL LOG</span>
@@ -1002,6 +1076,92 @@ export default function MaritimeDashboard() {
       {activeTopTab === 'COMMS' && (
         <div className="absolute inset-0 z-[5] flex items-center justify-center animate-fade-in pointer-events-none">
            <div className="text-[#c3f5ff] text-[24px] font-bold tracking-[0.2em] opacity-30" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>COMMS RELAY SECURE</div>
+        </div>
+      )}
+
+      {/* ── DETAILED LOGS ── */}
+      {activeTopTab === 'DETAILED LOGS' && (
+        <div className="absolute inset-0 z-[15] pt-[80px] pb-6 px-6 pointer-events-auto flex items-center justify-center bg-[rgba(2,8,23,0.85)] backdrop-blur-md animate-fade-in">
+          <div className="w-full h-full max-w-6xl max-h-[800px] hud-panel flex flex-col overflow-hidden shadow-[0_20px_60px_rgba(0,0,0,0.8)] relative">
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-[rgba(0,218,243,0.3)] bg-[rgba(10,14,26,0.6)] flex items-center justify-between shrink-0">
+              <div>
+                <h1 className="text-[18px] font-bold text-[#c3f5ff] tracking-[0.1em]" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>DETAILED LOGS</h1>
+                <p className="text-[10px] text-[#8a96ad] tracking-widest mt-1">HISTORICAL MOVEMENT & ZONE INCIDENTS</p>
+              </div>
+              <div className="flex items-center gap-4">
+                <div className="flex items-center bg-[rgba(20,28,31,0.8)] border border-[rgba(59,73,76,0.5)] rounded overflow-hidden h-8">
+                  <svg className="w-3.5 h-3.5 text-[#00daf3] ml-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                  <input type="text" placeholder="FILTER BOAT ID..." value={boatFilter} onChange={(e) => setBoatFilter(e.target.value)} className="bg-transparent px-3 text-[11px] text-[#c3f5ff] placeholder-[#5a6478] focus:outline-none w-40 font-mono tracking-widest" />
+                  {boatFilter && <button onClick={() => setBoatFilter('')} className="mr-2 text-[#8a96ad] hover:text-[#00daf3]"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>}
+                </div>
+                <button onClick={fetchLogsData} disabled={logsLoading} className="flex items-center gap-2 px-4 h-8 bg-[rgba(0,218,243,0.1)] hover:bg-[rgba(0,218,243,0.2)] border border-[rgba(0,218,243,0.4)] rounded text-[#00daf3] text-[10px] font-bold tracking-widest transition-colors">
+                  <svg className={`w-3.5 h-3.5 ${logsLoading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                  REFRESH
+                </button>
+              </div>
+            </div>
+            
+            {/* Tabs */}
+            <div className="flex gap-1 border-b border-[rgba(59,73,76,0.3)] bg-[rgba(10,14,26,0.4)] px-6">
+              {[ {id: 'movement', label: 'MOVEMENT HISTORY', count: historyMovements.length}, {id: 'zone', label: 'ZONE INCIDENTS', count: historyZoneEvents.length} ].map(tab => (
+                <button key={tab.id} onClick={() => setLogsActiveTab(tab.id)} className={`flex items-center gap-2 px-4 py-3 text-[11px] font-bold tracking-widest transition-all border-b-2 -mb-[1px] ${logsActiveTab === tab.id ? 'border-[#00daf3] text-[#00daf3] bg-[rgba(0,218,243,0.05)]' : 'border-transparent text-[#8a96ad] hover:text-[#dce4e5]'}`}>
+                  {tab.label}
+                  <span className={`px-1.5 py-0.5 rounded text-[9px] ${logsActiveTab === tab.id ? 'bg-[rgba(0,218,243,0.15)]' : 'bg-[rgba(255,255,255,0.05)]'}`}>{tab.count}</span>
+                </button>
+              ))}
+            </div>
+            
+            {/* Table Area */}
+            <div className="flex-1 overflow-y-auto custom-scrollbar relative bg-[rgba(5,10,15,0.4)]">
+              {logsError && (
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-[rgba(239,68,68,0.1)] border border-[#ef4444] text-[#ef4444] text-[10px] font-bold tracking-widest px-4 py-1.5 rounded z-10 flex items-center gap-2">
+                  <span className="animate-pulse">⚠</span> {logsError}
+                </div>
+              )}
+              
+              <table className="w-full text-left border-collapse">
+                <thead className="sticky top-0 bg-[rgba(10,15,22,0.95)] backdrop-blur-md z-10 shadow-md">
+                  <tr>
+                    <th className="px-6 py-3 text-[10px] font-bold text-[#8a96ad] tracking-widest border-b border-[rgba(59,73,76,0.5)]">ID</th>
+                    {logsActiveTab === 'movement' && <th className="px-6 py-3 text-[10px] font-bold text-[#8a96ad] tracking-widest border-b border-[rgba(59,73,76,0.5)]">LATITUDE</th>}
+                    {logsActiveTab === 'movement' && <th className="px-6 py-3 text-[10px] font-bold text-[#8a96ad] tracking-widest border-b border-[rgba(59,73,76,0.5)]">LONGITUDE</th>}
+                    {logsActiveTab === 'movement' && <th className="px-6 py-3 text-[10px] font-bold text-[#8a96ad] tracking-widest border-b border-[rgba(59,73,76,0.5)]">DISTANCE</th>}
+                    <th className="px-6 py-3 text-[10px] font-bold text-[#8a96ad] tracking-widest border-b border-[rgba(59,73,76,0.5)]">ZONE</th>
+                    {logsActiveTab === 'zone' && <th className="px-6 py-3 text-[10px] font-bold text-[#8a96ad] tracking-widest border-b border-[rgba(59,73,76,0.5)]">LATITUDE</th>}
+                    {logsActiveTab === 'zone' && <th className="px-6 py-3 text-[10px] font-bold text-[#8a96ad] tracking-widest border-b border-[rgba(59,73,76,0.5)]">LONGITUDE</th>}
+                    <th className="px-6 py-3 text-[10px] font-bold text-[#8a96ad] tracking-widest border-b border-[rgba(59,73,76,0.5)]">TIMESTAMP</th>
+                  </tr>
+                </thead>
+                <tbody className="text-[12px] font-mono">
+                  {logsActiveTab === 'movement' ? (
+                    historyMovements.length === 0 ? <EmptyRow cols={6} loading={logsLoading} /> : 
+                    historyMovements.map((m, i) => (
+                      <tr key={m._id ?? i} className="border-b border-[rgba(59,73,76,0.2)] hover:bg-[rgba(255,255,255,0.02)] transition-colors">
+                        <td className="px-6 py-3 text-[#00daf3] font-bold">{m.boatId ?? '—'}</td>
+                        <td className="px-6 py-3 text-[#dce4e5]">{m.lat != null ? `${m.lat.toFixed(5)}°N` : '—'}</td>
+                        <td className="px-6 py-3 text-[#dce4e5]">{m.lon != null ? `${m.lon.toFixed(5)}°E` : '—'}</td>
+                        <td className="px-6 py-3 text-[#8a96ad]">{m.distance != null ? `${m.distance.toFixed(1)} km` : '—'}</td>
+                        <td className="px-6 py-3"><ZoneBadge zone={m.zone} /></td>
+                        <td className="px-6 py-3 text-[#5a6478] text-[10px] tracking-wider">{fmtDate(m.timestamp)}</td>
+                      </tr>
+                    ))
+                  ) : (
+                    historyZoneEvents.length === 0 ? <EmptyRow cols={5} loading={logsLoading} /> :
+                    historyZoneEvents.map((a, i) => (
+                      <tr key={a._id ?? i} className="border-b border-[rgba(59,73,76,0.2)] hover:bg-[rgba(255,255,255,0.02)] transition-colors">
+                        <td className="px-6 py-3 text-[#00daf3] font-bold">{a.boatId ?? '—'}</td>
+                        <td className="px-6 py-3"><ZoneBadge zone={a.zone} /></td>
+                        <td className="px-6 py-3 text-[#dce4e5]">{a.lat != null ? `${a.lat.toFixed(5)}°N` : '—'}</td>
+                        <td className="px-6 py-3 text-[#dce4e5]">{a.lon != null ? `${a.lon.toFixed(5)}°E` : '—'}</td>
+                        <td className="px-6 py-3 text-[#5a6478] text-[10px] tracking-wider">{fmtDate(a.timestamp)}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       )}
       
