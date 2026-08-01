@@ -9,7 +9,17 @@ export default defineConfig({
       '@': path.resolve(__dirname, './'),
     },
   },
-  build: {
-    outDir: 'dist',
+  server: {
+    port: 3000,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:4000',
+        changeOrigin: true
+      },
+      '/socket.io': {
+        target: 'http://localhost:4000',
+        ws: true
+      }
+    }
   }
 })

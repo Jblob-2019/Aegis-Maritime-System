@@ -1,11 +1,14 @@
 {
   "name": "aegis-maritime-system",
   "private": true,
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "dev": "concurrently -k -n backend,frontend -c blue,magenta \"npm --prefix apps/backend-api run dev\" \"npm --prefix apps/dashboard-next run dev\"",
     "build": "npm --prefix apps/dashboard-next run build",
     "start": "npm run build && npm --prefix apps/backend-api start",
-    "stop": "kill-port 4000 5173",
+    "stop": "kill-port 4000 3000",
     "stop:all": "npm run stop"
   },
   "dependencies": {

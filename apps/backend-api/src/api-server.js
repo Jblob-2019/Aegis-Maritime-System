@@ -11,6 +11,8 @@ import crypto from 'node:crypto'
 import { Server } from 'socket.io'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import helmet from 'helmet'
+import rateLimit from 'express-rate-limit'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -63,6 +65,20 @@ const __dirname = path.dirname(__filename)
 const PORT = Number(process.env.PORT) || 4000
 const FRONTEND_URL = process.env.FRONTEND_URL
 const MONGO_URI = process.env.MONGO_URI
+const JWT_SECRET = process.env.JWT_SECRET
+
+if (process.env.NODE_ENV === 'production' && !JWT_SECRET) {
+  console.error('❌ JWT_SECRET is missing. Cannot start in production without a secure secret.')
+  process.exit(1)
+}
+const SAFE_JWT_SECRET = JWT_SECRET || 'aegis-super-secret-key-2026'
+
+const HARDWARE_API_KEY = process.env.HARDWARE_API_KEY
+if (process.env.NODE_ENV === 'production' && !HARDWARE_API_KEY) {
+  console.error('❌ HARDWARE_API_KEY is missing. Cannot start in production without a secure hardware key.')
+  process.exit(1)
+}
+const SAFE_HARDWARE_API_KEY = HARDWARE_API_KEY || 'aegis-hardware-secret-2026'
 
 if (!MONGO_URI) {
   console.error('❌ MONGO_URI is not set – backend cannot connect to MongoDB Atlas.')
@@ -75,10 +91,23 @@ const maskedUri = MONGO_URI.replace(/(mongodb(?:\+srv)?:\/\/[^:]+:)([^@]+)(@)/, 
 console.log('🔧 Backend starting with PORT=', PORT)
 console.log('🔧 MONGO_URI =', maskedUri)
 
-// CORS: allow FRONTEND_URL if set, otherwise reflect request origin to enable cross-origin API calls & WebSockets.
-const corsOrigin = FRONTEND_URL && FRONTEND_URL !== '*' ? FRONTEND_URL : true
+// CORS: Explicitly allow FRONTEND_URL or default strictly.
+let allowedOrigins = []
+if (FRONTEND_URL && FRONTEND_URL !== '*') {
+  allowedOrigins.push(FRONTEND_URL)
+} else {
+  // In dev, allow localhost:3000
+  allowedOrigins.push('http://localhost:3000')
+}
+
 const corsOptions = {
-  origin: corsOrigin,
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true)
+    } else {
+      callback(new Error('Not allowed by CORS'))
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
 }
@@ -88,11 +117,24 @@ const corsOptions = {
 // ---------------------------------------------------------------------------
 
 const app = express()
+app.use(helmet({
+  contentSecurityPolicy: false, // Don't block the frontend from loading local assets
+  crossOriginEmbedderPolicy: false
+}))
 app.use(cors(corsOptions))
-app.use(express.json())
+app.use(express.json({ limit: '10kb' }))
 
 const server = http.createServer(app)
 const io = new Server(server, { cors: corsOptions })
+
+// Login rate limiter
+const loginLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 5, // Limit each IP to 5 login requests per `window`
+  message: { message: 'Too many login attempts, please try again after a minute' },
+  standardHeaders: true,
+  legacyHeaders: false,
+})
 
 // ---------------------------------------------------------------------------
 // 1. Connect to MongoDB
@@ -113,7 +155,7 @@ mongoose
 // ---------------------------------------------------------------------------
 
 const boatSchema = new mongoose.Schema({
-  boatId:    { type: String, default: 'BOAT1' },
+  boatId:    { type: String, required: true },
   lat:       { type: Number, required: true },
   lon:       { type: Number, required: true },
   distance:  { type: Number },
@@ -126,7 +168,7 @@ boatSchema.index({ boatId: 1, timestamp: -1 })
 const Boat = mongoose.model('Boat', boatSchema)
 
 const alertSchema = new mongoose.Schema({
-  boatId:    { type: String, default: 'BOAT1' },
+  boatId:    { type: String, required: true },
   zone:      { type: String },
   lat:       { type: Number },
   lon:       { type: Number },
@@ -180,7 +222,7 @@ app.get('/health', (_req, res) => {
  * @param {Request}  req
  * @param {Response} res
  */
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', loginLimiter, (req, res) => {
   const { username, password } = req.body || {}
   const adminUser = process.env.ADMIN_USER || 'admin'
   const adminPass = process.env.ADMIN_PASSWORD || 'admin123'
@@ -209,7 +251,6 @@ app.post('/api/auth/login', (req, res) => {
  * @returns {string}
  */
 function signJwt(payload, expiresInSeconds = 86400) {
-  const jwtSecret = process.env.JWT_SECRET || 'aegis-super-secret-key-2026'
   const header = { alg: 'HS256', typ: 'JWT' }
   const now = Math.floor(Date.now() / 1000)
   const fullPayload = { ...payload, iat: now, exp: now + expiresInSeconds }
@@ -217,7 +258,7 @@ function signJwt(payload, expiresInSeconds = 86400) {
   const base64Header = Buffer.from(JSON.stringify(header)).toString('base64url')
   const base64Payload = Buffer.from(JSON.stringify(fullPayload)).toString('base64url')
   const signature = crypto
-    .createHmac('sha256', jwtSecret)
+    .createHmac('sha256', SAFE_JWT_SECRET)
     .update(`${base64Header}.${base64Payload}`)
     .digest('base64url')
 
@@ -235,9 +276,16 @@ function verifyJwt(token) {
   if (parts.length !== 3) return null
 
   const [base64Header, base64Payload, signature] = parts
-  const jwtSecret = process.env.JWT_SECRET || 'aegis-super-secret-key-2026'
+  
+  try {
+    const headerObj = JSON.parse(Buffer.from(base64Header, 'base64url').toString('utf8'))
+    if (headerObj.alg !== 'HS256') return null
+  } catch {
+    return null
+  }
+
   const expectedSig = crypto
-    .createHmac('sha256', jwtSecret)
+    .createHmac('sha256', SAFE_JWT_SECRET)
     .update(`${base64Header}.${base64Payload}`)
     .digest('base64url')
 
@@ -280,7 +328,7 @@ function authenticateJwt(req, res, next) {
 // 2d. Input validation helpers
 // ---------------------------------------------------------------------------
 
-const ALLOWED_ZONES = ['SAFE', 'WARNING', 'DANGER', 'ALERT', 'CLEAR', 'UNKNOWN']
+const ALLOWED_ZONES = ['SAFE', 'WARNING', 'DANGER', 'NO_FIX']
 
 /**
  * Coerce a value into a finite number, or return NaN.
@@ -353,6 +401,17 @@ function validateLocationPayload(body) {
  * @param {Response} res
  */
 app.post('/api/location', async (req, res) => {
+  const hardwareKey = req.headers['x-aegis-key'] || ''
+
+  const providedBuffer = Buffer.alloc(64)
+  const expectedBuffer = Buffer.alloc(64)
+  providedBuffer.write(hardwareKey.substring(0, 64))
+  expectedBuffer.write(SAFE_HARDWARE_API_KEY.substring(0, 64))
+
+  if (!crypto.timingSafeEqual(providedBuffer, expectedBuffer)) {
+    return res.status(401).json({ error: 'Unauthorized hardware access' })
+  }
+
   const validation = validateLocationPayload(req.body)
   if (!validation.ok) {
     return res.status(400).json({ error: validation.error })
@@ -403,19 +462,13 @@ app.post('/api/location', async (req, res) => {
  * @param {Request}  _req
  * @param {Response} res
  */
-app.get('/api/location', async (_req, res) => {
+app.get('/api/location', authenticateJwt, async (_req, res) => {
   try {
     const latest = await Boat.findOne().sort({ timestamp: -1 })
     if (latest) {
       res.json(latest)
     } else {
-      res.json({
-        lat: 9.30,
-        lon: 80.50,
-        distance: 25.0,
-        zone: 'SAFE',
-        timestamp: new Date().toISOString(),
-      })
+      res.status(204).send()
     }
   } catch (err) {
     console.error('❌ DB Fetch Error:', err)
@@ -431,7 +484,7 @@ app.get('/api/location', async (_req, res) => {
  * @param {Request}  req
  * @param {Response} res
  */
-app.get('/api/location/history', async (req, res) => {
+app.get('/api/location/history', authenticateJwt, async (req, res) => {
   try {
     const query = {}
     if (req.query.boatId) query.boatId = String(req.query.boatId)
@@ -451,7 +504,7 @@ app.get('/api/location/history', async (req, res) => {
  * @param {Request}  _req
  * @param {Response} res
  */
-app.get('/api/location/latest', async (_req, res) => {
+app.get('/api/location/latest', authenticateJwt, async (_req, res) => {
   try {
     const latestPerBoat = await Boat.aggregate([
       { $sort: { timestamp: -1 } },
@@ -483,7 +536,7 @@ app.get('/api/location/latest', async (_req, res) => {
  * @param {Request}  req
  * @param {Response} res
  */
-app.get('/api/alerts', async (req, res) => {
+app.get('/api/alerts', authenticateJwt, async (req, res) => {
   try {
     const query = {}
     if (req.query.boatId) query.boatId = String(req.query.boatId)

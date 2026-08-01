@@ -24,14 +24,6 @@ export default function LoginPage() {
     e.preventDefault();
     setError('');
 
-    // --- HACKATHON SHORTCUT FOR DEMO ---
-    // If you want to bypass the database for the demo video, use this block:
-    if (username === 'admin' && password === 'admin123') {
-      localStorage.setItem('role', 'admin');
-      navigate('/dashboard');
-      return;
-    }
-
     // --- PRODUCTION AXIOS LOGIC ---
     try {
       const { NEXT_PUBLIC_BACKEND_URL } = getRuntimeEnv();

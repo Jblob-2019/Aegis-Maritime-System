@@ -29,6 +29,13 @@ const SERIAL_BAUD = Number(process.env.SERIAL_BAUD) || 115_200
 // Default port matches api-server.js and docker-compose.yml.
 const BRIDGE_TARGET = process.env.BRIDGE_TARGET || 'http://localhost:4000/api/location'
 
+const HARDWARE_API_KEY = process.env.HARDWARE_API_KEY
+if (process.env.NODE_ENV === 'production' && !HARDWARE_API_KEY) {
+  console.error('❌ HARDWARE_API_KEY is missing. The bridge cannot authenticate with the backend in production.')
+  process.exit(1)
+}
+const SAFE_HARDWARE_API_KEY = HARDWARE_API_KEY || 'aegis-hardware-secret-2026'
+
 const port = new SerialPort({ path: SERIAL_PATH, baudRate: SERIAL_BAUD })
 const parser = port.pipe(new ReadlineParser({ delimiter: '\r\n' }))
 
@@ -62,7 +69,9 @@ parser.on('data', async (data) => {
         }
 
         // Forward to the backend (bypasses WiFi and firewalls)
-        await axios.post(BRIDGE_TARGET, payload)
+        await axios.post(BRIDGE_TARGET, payload, {
+          headers: { 'X-Aegis-Key': SAFE_HARDWARE_API_KEY }
+        })
         console.log('✅ Successfully bridged packet to local database!')
       }
     } catch (err) {
@@ -72,9 +81,21 @@ parser.on('data', async (data) => {
   }
 })
 
-/**
- * @param {Error} err
- */
 port.on('error', (err) => {
   console.error('❌ Serial Port Error (Is the Arduino Serial Monitor closed?):', err.message)
+})
+
+port.on('open', () => {
+  console.log('✅ Serial Port Opened Successfully!')
+})
+
+port.on('close', () => {
+  console.error('⚠️ Serial Port Closed! Will attempt to reconnect in 5 seconds...')
+  setTimeout(() => {
+    if (!port.isOpen) {
+      port.open((err) => {
+        if (err) console.error('Reconnect failed:', err.message)
+      })
+    }
+  }, 5000)
 })
