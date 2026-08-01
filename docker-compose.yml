@@ -25,6 +25,7 @@ services:
       # inject-env.sh will auto-detect the host's LAN IP and bake it
       # into /app/dist/env.js. Override with HOST_LAN_IP only if your
       # server has multiple interfaces and the wrong one is picked.
+      HOST_LAN_IP: 192.168.29.141
       BACKEND_PORT: 4000
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
