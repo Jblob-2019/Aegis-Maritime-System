@@ -13,6 +13,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
+import os from 'node:os'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -97,10 +98,36 @@ console.log('🔧 MONGO_URI =', maskedUri)
 // `http://localhost:3000` from the host. Both are valid.
 // If you need to lock this down for production, set ALLOWED_ORIGINS as a
 // comma-separated list of allowed origins in the environment.
+
+function getLanIp() {
+  const interfaces = os.networkInterfaces()
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address
+      }
+    }
+  }
+  return '127.0.0.1'
+}
+
+const autoFrontend = `http://${getLanIp()}:3000`
+const explicitFrontend = process.env.FRONTEND_URL || ''
+
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean)
+
+if (explicitFrontend && !ALLOWED_ORIGINS.includes(explicitFrontend)) {
+  ALLOWED_ORIGINS.push(explicitFrontend)
+}
+if (!ALLOWED_ORIGINS.includes(autoFrontend)) {
+  ALLOWED_ORIGINS.push(autoFrontend)
+}
+if (!ALLOWED_ORIGINS.includes('http://localhost:3000')) {
+  ALLOWED_ORIGINS.push('http://localhost:3000')
+}
 
 const corsOptions = {
   origin: (origin, callback) => {

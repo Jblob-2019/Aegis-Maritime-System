@@ -18,15 +18,14 @@ detect_lan_ip() {
     return
   fi
 
-  # 2. busybox `hostname -I` lists all host IPs. Pick the first
-  #    routable IPv4 — skip loopback (127.0.0.0/8) and link-local
-  #    (169.254.0.0/16). Works under Docker network_mode: host.
-  for ip in $(hostname -I 2>/dev/null); do
-    case "$ip" in
-      127.*|169.254.*) continue ;;
-      *.*.*.*)         echo "$ip"; return ;;
-    esac
-  done
+  # 2. BusyBox `hostname` lacks `-I`. We parse the default route to find the host's actual LAN IP.
+  #    `ip route show default` outputs something like:
+  #    `default via 192.168.29.1 dev eth0 src 192.168.29.141 metric 100`
+  ip_val=$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}')
+  if [ -n "$ip_val" ]; then
+    echo "$ip_val"
+    return
+  fi
 
   # 3. last-ditch fallback (offline / misconfigured)
   echo "127.0.0.1"

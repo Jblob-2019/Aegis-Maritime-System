@@ -12,6 +12,7 @@ services:
     environment:
       # MongoDB is not run locally; this points at the external Atlas cluster.
       PORT: 4000
+      FRONTEND_URL: http://192.168.29.141:3000
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
