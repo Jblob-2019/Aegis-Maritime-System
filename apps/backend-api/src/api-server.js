@@ -9,6 +9,11 @@ import mongoose from 'mongoose'
 import http from 'node:http'
 import crypto from 'node:crypto'
 import { Server } from 'socket.io'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
 // ---------------------------------------------------------------------------
 // JSDoc type definitions (replace the previous TypeScript interfaces)
@@ -488,6 +493,21 @@ app.get('/api/alerts', async (req, res) => {
     console.error('❌ DB Alerts Error:', err)
     res.status(500).json({ error: 'Failed to fetch alerts' })
   }
+})
+
+// ---------------------------------------------------------------------------
+// 7. Serve static frontend files
+// ---------------------------------------------------------------------------
+
+const frontendBuildPath = path.resolve(__dirname, '../../dashboard-next/dist')
+app.use(express.static(frontendBuildPath))
+
+// For any other request, send the index.html so React Router handles routing
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api')) {
+    return next()
+  }
+  res.sendFile(path.join(frontendBuildPath, 'index.html'))
 })
 
 // ---------------------------------------------------------------------------

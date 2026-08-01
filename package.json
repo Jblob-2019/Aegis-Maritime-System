@@ -2,18 +2,10 @@
   "name": "aegis-maritime-system",
   "private": true,
   "scripts": {
-    "dev": "concurrently -k -n backend,vite,next -c blue,green,magenta \"npm --prefix apps/backend-api run dev\" \"npm --prefix apps/dashboard-vite run dev\" \"npm --prefix apps/dashboard-next run dev -- -p 3003\"",
-    "dev:default": "concurrently -k -n backend,next -c blue,magenta \"npm --prefix apps/backend-api run dev\" \"npm --prefix apps/dashboard-next run dev -- -p 3003\"",
-    "dev:next-stack": "concurrently -k -n backend,next -c blue,magenta \"npm --prefix apps/backend-api run dev\" \"npm --prefix apps/dashboard-next run dev -- -p 3003\"",
-    "dev:vite-stack": "concurrently -k -n backend,vite -c blue,green \"npm --prefix apps/backend-api run dev\" \"npm --prefix apps/dashboard-vite run dev\"",
-    "dev:backend": "npm --prefix apps/backend-api run dev",
-    "dev:vite": "npm --prefix apps/dashboard-vite run dev",
-    "dev:next": "npm --prefix apps/dashboard-next run dev",
-    "start": "npm run dev:default",
-    "start:all": "npm run dev",
-    "start:next": "npm run dev:next-stack",
-    "start:vite": "npm run dev:vite-stack",
-    "stop": "kill-port 3000 5000 5173",
+    "dev": "concurrently -k -n backend,frontend -c blue,magenta \"npm --prefix apps/backend-api run dev\" \"npm --prefix apps/dashboard-next run dev\"",
+    "build": "npm --prefix apps/dashboard-next run build",
+    "start": "npm run build && npm --prefix apps/backend-api start",
+    "stop": "kill-port 4000 5173",
     "stop:all": "npm run stop"
   },
   "dependencies": {
