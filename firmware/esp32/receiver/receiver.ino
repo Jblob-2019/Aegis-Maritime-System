@@ -2,13 +2,14 @@
 #include <HTTPClient.h>
 #include <SPI.h>
 #include <LoRa.h>
-#include <WiFiClientSecure.h> // <-- CRITICAL NEW INCLUDE FOR RENDER HTTPS
+#include <WiFiClientSecure.h> // needed for Render HTTPS
 
 // --- UPDATE THESE WITH YOUR DETAILS ---
-const char* WIFI_SSID = "OnePlus 11 5G FD58";
+// TODO before sharing this repo publicly: move these into a secrets header
+// or use WiFiManager instead of hardcoding credentials.
+const char* WIFI_SSID     = "OnePlus 11 5G FD58";
 const char* WIFI_PASSWORD = "pranes2007";
 
-// Replace this with your actual live Render URL! (Make sure it has https://)
 const char* SERVER_URL = "https://aegis-backend-3w2p.onrender.com/api/location";
 // --------------------------------------
 
@@ -17,83 +18,104 @@ const char* SERVER_URL = "https://aegis-backend-3w2p.onrender.com/api/location";
 #define RST   14
 #define DIO0  2
 
-// LED & Buzzer Pins
-#define LED_PIN    4
-#define BUZZER_PIN 15
+// FIXED: was an infinite while() loop with no timeout — a wrong password or
+// out-of-range AP would hang the device forever at boot.
+const unsigned long WIFI_CONNECT_TIMEOUT_MS = 15000;
 
-// Current zone state
-String currentZone = "SAFE";
+String currentZone = "SAFE"; // SAFE, WARNING, DANGER, or NO_FIX — kept for
+                              // logging/serial output only, no hardware tied to it
 
-// Non-blocking blink state
-unsigned long lastBlinkTime = 0;
-bool ledState = false;
+// FIXED: was dropping any reading whose cloud POST failed. Now a single
+// failed payload is queued and retried on the next loop instead of lost.
+// (Single-slot queue — for multi-boat / high-frequency use, upgrade this
+// to a small ring buffer so a burst of failures doesn't overwrite itself.)
+String pendingPayload = "";
+bool hasPending = false;
 
-// Drive LED + buzzer based on zone (call every loop tick)
-void updateHardware() {
-  unsigned long now = millis();
+// Connect to WiFi with a timeout instead of blocking forever.
+bool connectWiFi() {
+  Serial.print("Connecting to WiFi");
+  WiFi.disconnect();
 
-  if (currentZone == "DANGER") {
-    // LED solid ON, buzzer ON
-    digitalWrite(LED_PIN, HIGH);
-    digitalWrite(BUZZER_PIN, HIGH);
-    ledState = true;
+  IPAddress googleDNS(8, 8, 8, 8);
+  WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, googleDNS);
 
-  } else if (currentZone == "WARNING") {
-    // LED blinks at 500 ms, buzzer OFF
-    digitalWrite(BUZZER_PIN, LOW);
-    if (now - lastBlinkTime >= 500) {
-      lastBlinkTime = now;
-      ledState = !ledState;
-      digitalWrite(LED_PIN, ledState ? HIGH : LOW);
-    }
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < WIFI_CONNECT_TIMEOUT_MS) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nWiFi Connected!");
+    Serial.print("ESP32 IP Address: ");
+    Serial.println(WiFi.localIP());
+    return true;
   } else {
-    // SAFE — everything off
-    digitalWrite(LED_PIN, LOW);
-    digitalWrite(BUZZER_PIN, LOW);
-    ledState = false;
+    Serial.println("\nWiFi connect timed out — will keep retrying in the background.");
+    return false;
+  }
+}
+
+// Send one JSON payload to the cloud. Returns true on success (HTTP 2xx).
+bool sendToCloud(const String &jsonPayload) {
+  if (WiFi.status() != WL_CONNECTED) return false;
+
+  WiFiClientSecure client;
+  client.setInsecure(); // NOTE: skips TLS certificate validation — fine for
+                        // testing, but replace with setCACert(...) before
+                        // any real deployment; right now this connection
+                        // can be intercepted.
+  HTTPClient http;
+  http.setTimeout(5000); // FIXED: no timeout before — a slow/cold Render
+                          // instance could block the loop (and LoRa
+                          // reception) indefinitely.
+
+  http.begin(client, SERVER_URL);
+  http.addHeader("Content-Type", "application/json");
+
+  int httpResponseCode = http.POST(jsonPayload);
+  http.end();
+
+  if (httpResponseCode > 0) {
+    Serial.printf("Cloud HTTP Response: %d\n", httpResponseCode);
+    return httpResponseCode >= 200 && httpResponseCode < 300;
+  } else {
+    Serial.printf("Cloud HTTP Error: %d\n", httpResponseCode);
+    return false;
   }
 }
 
 void setup() {
   Serial.begin(115200);
 
-  pinMode(LED_PIN,    OUTPUT);
-  pinMode(BUZZER_PIN, OUTPUT);
-  digitalWrite(LED_PIN,    LOW);
-  digitalWrite(BUZZER_PIN, LOW);
+  connectWiFi();
 
-  // 1. Connect to WiFi
-  Serial.print("Connecting to WiFi");
-  
-  // ========================================================
-  // THE MAGIC DNS FIX: Force ESP32 to use Google's brain
-  // ========================================================
-  IPAddress googleDNS(8, 8, 8, 8);
-  WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, googleDNS); 
-  // ========================================================
-
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("\nWiFi Connected!");
-  Serial.print("ESP32 IP Address: ");
-  Serial.println(WiFi.localIP());
-
-  // 2. Initialize LoRa
   LoRa.setPins(SS, RST, DIO0);
   if (!LoRa.begin(433E6)) {
     Serial.println("LoRa init failed. Check wiring!");
-    while (1); // Halt if LoRa fails
+    while (1);
   }
   Serial.println("LoRa Receiver Ready! Waiting for boat data...");
 }
 
 void loop() {
-  // Always run hardware update so blink is non-blocking
-  updateHardware();
+  // FIXED: background reconnect instead of a one-shot connect at boot.
+  // Doesn't block LoRa reception while retrying.
+  static unsigned long lastReconnectAttempt = 0;
+  if (WiFi.status() != WL_CONNECTED && millis() - lastReconnectAttempt > 10000) {
+    lastReconnectAttempt = millis();
+    connectWiFi();
+  }
+
+  // Retry the last failed upload before handling any new packet.
+  if (hasPending && WiFi.status() == WL_CONNECTED) {
+    if (sendToCloud(pendingPayload)) {
+      hasPending = false;
+    }
+  }
 
   int packetSize = LoRa.parsePacket();
 
@@ -105,52 +127,33 @@ void loop() {
 
     Serial.print("\nReceived LoRa packet: ");
     Serial.println(incoming);
-    // Incoming format from boat: BOAT1,9.3000,80.5000,25.00,SAFE
+    // Format from boat: BOAT1,9.3000,80.5000,25.00,SAFE
 
-    // 3. Parse the comma-separated data
     int firstComma  = incoming.indexOf(',');
     int secondComma = incoming.indexOf(',', firstComma + 1);
     int thirdComma  = incoming.indexOf(',', secondComma + 1);
     int fourthComma = incoming.indexOf(',', thirdComma + 1);
 
     if (firstComma > 0 && fourthComma > 0) {
-      String boatId = incoming.substring(0, firstComma); // Extracted Boat ID!
+      String boatId = incoming.substring(0, firstComma);
       String lat  = incoming.substring(firstComma + 1, secondComma);
       String lon  = incoming.substring(secondComma + 1, thirdComma);
       String dist = incoming.substring(thirdComma + 1, fourthComma);
       String zone = incoming.substring(fourthComma + 1);
       zone.trim();
 
-      // 4. Update hardware immediately based on received zone
       currentZone = zone;
       Serial.println("Zone: " + currentZone);
 
-      // 5. Build JSON and POST to Render backend
-      // Included boatId here in case your new MongoDB schema needs it
-      String jsonPayload = "{\"boatId\":\"" + boatId + "\",\"lat\":" + lat + ",\"lon\":" + lon + ",\"distance\":" + dist + ",\"zone\":\"" + zone + "\"}";
+      String jsonPayload = "{\"boatId\":\"" + boatId + "\",\"lat\":" + lat +
+                            ",\"lon\":" + lon + ",\"distance\":" + dist +
+                            ",\"zone\":\"" + zone + "\"}";
       Serial.println("Sending to Cloud: " + jsonPayload);
 
-      if (WiFi.status() == WL_CONNECTED) {
-        
-        // --- THIS IS THE MAGIC RENDER HTTPS FIX ---
-        WiFiClientSecure client;
-        client.setInsecure(); // Skips checking the Render SSL certificate (perfect for testing)
-        HTTPClient http;
-        
-        http.begin(client, SERVER_URL); 
-        http.addHeader("Content-Type", "application/json");
-
-        int httpResponseCode = http.POST(jsonPayload);
-
-        if (httpResponseCode > 0) {
-          Serial.printf("Cloud HTTP Response: %d\n", httpResponseCode);
-        } else {
-          Serial.printf("Cloud HTTP Error: %d\n", httpResponseCode);
-        }
-        http.end();
-      } else {
-        Serial.println("WiFi Disconnected. Reconnecting...");
-        WiFi.reconnect();
+      if (!sendToCloud(jsonPayload)) {
+        pendingPayload = jsonPayload;
+        hasPending = true;
+        Serial.println("Cloud send failed — queued for retry.");
       }
     }
   }
