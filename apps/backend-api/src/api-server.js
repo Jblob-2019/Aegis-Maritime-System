@@ -63,7 +63,6 @@ const __dirname = path.dirname(__filename)
 // Default backend port (override via PORT env, e.g. set in docker-compose.yml).
 // Compose publishes the backend on 4000, so 4000 is the right default.
 const PORT = Number(process.env.PORT) || 4000
-const FRONTEND_URL = process.env.FRONTEND_URL
 const MONGO_URI = process.env.MONGO_URI
 const JWT_SECRET = process.env.JWT_SECRET
 
@@ -91,19 +90,24 @@ const maskedUri = MONGO_URI.replace(/(mongodb(?:\+srv)?:\/\/[^:]+:)([^@]+)(@)/, 
 console.log('🔧 Backend starting with PORT=', PORT)
 console.log('🔧 MONGO_URI =', maskedUri)
 
-// CORS: Explicitly allow FRONTEND_URL or default strictly.
-let allowedOrigins = []
-if (FRONTEND_URL && FRONTEND_URL !== '*') {
-  allowedOrigins.push(FRONTEND_URL)
-} else {
-  // In dev, allow localhost:3000
-  allowedOrigins.push('http://localhost:3000')
-}
+// CORS: reflect the request Origin (allows any host that points at this
+// backend). Because the frontend auto-detects this host's LAN IP at
+// startup and bakes it into window.__ENV__, the request Origin will
+// always be `http://<lan-ip>:3000` from another device, or
+// `http://localhost:3000` from the host. Both are valid.
+// If you need to lock this down for production, set ALLOWED_ORIGINS as a
+// comma-separated list of allowed origins in the environment.
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean)
 
 const corsOptions = {
   origin: (origin, callback) => {
-    // Allow any origin for local development
-    callback(null, true)
+    if (!origin) return callback(null, true) // same-origin / curl
+    if (ALLOWED_ORIGINS.length === 0) return callback(null, true)
+    if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true)
+    return callback(new Error(`Origin ${origin} not allowed by CORS`))
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],

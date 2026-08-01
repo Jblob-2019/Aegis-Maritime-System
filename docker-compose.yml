@@ -2,28 +2,30 @@ services:
   backend:
     image: ghcr.io/pranesdev/aegis-backend:latest
     restart: unless-stopped
+    # Host networking lets the frontend reach the backend on
+    # `localhost:4000` from the same namespace, and lets the host's
+    # LAN IP serve dashboards from phones/other devices on the wifi
+    # without bridge-net port-translation surprises. Both services bind
+    # directly to all host interfaces.
+    network_mode: host
+    env_file: .env
     environment:
-      # Note: MongoDB is not run locally; MONGO_URI connects to an external Atlas cluster.
-      MONGO_URI: ${MONGO_URI}
+      # MongoDB is not run locally; this points at the external Atlas cluster.
       PORT: 4000
-      JWT_SECRET: ${JWT_SECRET}
-      HARDWARE_API_KEY: ${HARDWARE_API_KEY}
-    ports:
-      - "4000:4000"
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
   frontend:
     image: ghcr.io/pranesdev/aegis-frontend:latest
     restart: unless-stopped
+    network_mode: host
     depends_on:
       - backend
     environment:
-      # Defaults are fine; inject-env.sh will overwrite NEXT_PUBLIC_API_URL
-      # with the detected host LAN IP. NEXT_PUBLIC_SOCKET_URL mirrors it.
-      NEXT_PUBLIC_SOCKET_URL: ${PUBLIC_SOCKET_URL}
-    ports:
-      - "3000:3000"
+      # inject-env.sh will auto-detect the host's LAN IP and bake it
+      # into /app/dist/env.js. Override with HOST_LAN_IP only if your
+      # server has multiple interfaces and the wrong one is picked.
+      BACKEND_PORT: 4000
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
