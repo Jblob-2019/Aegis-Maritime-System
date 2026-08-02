@@ -71,7 +71,7 @@ export default function MaritimeDashboard() {
   const navigate = useNavigate();
   const [vesselId, setVesselId] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
-  const [activeNav, setActiveNav] = useState('Fleet');
+  const [activeNav, setActiveNav] = useState(null);
   const [activeTopTab, setActiveTopTab] = useState('TACTICAL');
   const [showSettings, setShowSettings] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);

@@ -467,7 +467,7 @@ export default function LeafletMap({
   });
   const trajectoryPolylineRef = useRef(null);
   const bathymetryLayerRef = useRef(null);
-  const [showBathymetry, setShowBathymetry] = useState(true);
+  const [showBathymetry, setShowBathymetry] = useState(false);
 
   const normalizeZone = (zone) => {
     if (zone === 'SAFE' || zone === 'WARNING' || zone === 'DANGER') return zone;
