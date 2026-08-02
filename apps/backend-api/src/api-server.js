@@ -81,13 +81,14 @@ if (process.env.NODE_ENV === 'production' && !HARDWARE_API_KEY) {
 const SAFE_HARDWARE_API_KEY = HARDWARE_API_KEY || 'aegis-hardware-secret-2026'
 
 if (!MONGO_URI) {
-  console.error('❌ MONGO_URI is not set – backend cannot connect to MongoDB Atlas.')
-  console.error('   Make sure docker-compose.yml has env_file: .env and the host .env exists.')
-  process.exit(1)
+  console.warn('⚠️ MONGO_URI is not set – continuing without MongoDB for local/dev startup.')
+  console.warn('   Configure it in .env to enable persistence and data-backed endpoints.')
 }
 
 // Mask the password before logging so we don't leak secrets to the log output.
-const maskedUri = MONGO_URI.replace(/(mongodb(?:\+srv)?:\/\/[^:]+:)([^@]+)(@)/, '$1***$3')
+const maskedUri = MONGO_URI
+  ? MONGO_URI.replace(/(mongodb(?:\+srv)?:\/\/[^:]+:)([^@]+)(@)/, '$1***$3')
+  : 'not-configured'
 console.log('🔧 Backend starting with PORT=', PORT)
 console.log('🔧 MONGO_URI =', maskedUri)
 
@@ -129,9 +130,19 @@ if (!ALLOWED_ORIGINS.includes('http://localhost:3000')) {
   ALLOWED_ORIGINS.push('http://localhost:3000')
 }
 
+function isLocalDevOrigin(origin) {
+  if (!origin) return true
+  try {
+    const { hostname } = new URL(origin)
+    return ['localhost', '127.0.0.1', '::1'].includes(hostname)
+  } catch {
+    return false
+  }
+}
+
 const corsOptions = {
   origin: (origin, callback) => {
-    if (!origin) return callback(null, true) // same-origin / curl
+    if (!origin || isLocalDevOrigin(origin)) return callback(null, true) // same-origin / curl / local dev
     if (ALLOWED_ORIGINS.length === 0) return callback(null, true)
     if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true)
     return callback(new Error(`Origin ${origin} not allowed by CORS`))
@@ -168,15 +179,19 @@ const loginLimiter = rateLimit({
 // 1. Connect to MongoDB
 // ---------------------------------------------------------------------------
 
-mongoose
-  .connect(MONGO_URI, {
-    // Time out quickly if the Atlas cluster can't be reached so we see the
-    // error in the logs instead of hanging silently.
-    serverSelectionTimeoutMS: 10_000,
-    connectTimeoutMS: 10_000,
-  })
-  .then(() => console.log('✅ MongoDB Atlas Connected!'))
-  .catch((err) => console.log('❌ MongoDB Connection Error:', err))
+if (MONGO_URI) {
+  mongoose
+    .connect(MONGO_URI, {
+      // Time out quickly if the Atlas cluster can't be reached so we see the
+      // error in the logs instead of hanging silently.
+      serverSelectionTimeoutMS: 10_000,
+      connectTimeoutMS: 10_000,
+    })
+    .then(() => console.log('✅ MongoDB Atlas Connected!'))
+    .catch((err) => console.log('❌ MongoDB Connection Error:', err))
+} else {
+  console.warn('⚠️ Skipping MongoDB connection because MONGO_URI is not configured.')
+}
 
 // ---------------------------------------------------------------------------
 // 2. Mongoose schemas & models
