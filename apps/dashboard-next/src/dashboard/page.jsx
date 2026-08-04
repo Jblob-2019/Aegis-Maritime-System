@@ -76,7 +76,8 @@ export default function MaritimeDashboard() {
   const [showSettings, setShowSettings] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
-  const [weatherLayer, setWeatherLayer] = useState('wind');
+  const [weatherLayer, setWeatherLayer] = useState(null);
+  const [cloudsTileOn, setCloudsTileOn] = useState(false);
   const [boats, setBoats] = useState([]);
   const [alerts, setAlerts] = useState([]);
   const [selectedBoatId, setSelectedBoatId] = useState(null);
@@ -400,6 +401,13 @@ export default function MaritimeDashboard() {
               selectedBoatId={selectedBoatId}
               demoMode={demoMode}
               weatherLayer={activeNav === 'Weather' ? weatherLayer : null}
+              cloudsTileOn={activeNav === 'Weather' ? cloudsTileOn : false}
+              // Hover inspector (the floating callout under the cursor)
+              // is only useful on the Weather tab — disable everywhere
+              // else so it doesn't pop up over Fleet / Sensors / etc.
+              enableHoverInspector={activeNav === 'Weather' && activeTopTab === 'TACTICAL'}
+              // Cloud-cover tile toggle (independent of the active layer).
+              cloudsTileOn={cloudsTileOn}
             />
         </Suspense>
       </div>
@@ -493,16 +501,27 @@ export default function MaritimeDashboard() {
       </header>
       {/* ── Weather Toggle Pill ── */}
       <div className={`absolute top-[72px] left-1/2 -translate-x-1/2 z-20 transition-all duration-300 ${activeNav === 'Weather' && activeTopTab === 'TACTICAL' ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}>
-        <div className="flex items-center bg-[rgba(10,14,26,0.85)] border border-[rgba(255,255,255,0.08)] rounded-full shadow-[0_8px_32px_rgba(0,0,0,0.4)] backdrop-blur-md p-1">
-          {['wind', 'clouds', 'storm', 'pressure'].map(mode => (
-            <button
-              key={mode}
-              onClick={() => setWeatherLayer(mode)}
-              className={`px-6 py-2 text-[10px] font-bold tracking-[0.15em] rounded-full transition-all ${weatherLayer === mode ? 'bg-[#304865] text-[#c3f5ff] shadow-inner' : 'text-[#8a96ad] hover:text-[#dce4e5] hover:bg-[rgba(255,255,255,0.04)]'}`}
-            >
-              {mode.toUpperCase()}
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          <div className="flex items-center bg-[rgba(10,14,26,0.85)] border border-[rgba(255,255,255,0.08)] rounded-full shadow-[0_8px_32px_rgba(0,0,0,0.4)] backdrop-blur-md p-1">
+            {['wind', 'clouds', 'storm', 'pressure'].map(mode => (
+              <button
+                key={mode}
+                onClick={() => setWeatherLayer(mode)}
+                className={`px-6 py-2 text-[10px] font-bold tracking-[0.15em] rounded-full transition-all ${weatherLayer === mode ? 'bg-[#304865] text-[#c3f5ff] shadow-inner' : 'text-[#8a96ad] hover:text-[#dce4e5] hover:bg-[rgba(255,255,255,0.04)]'}`}
+              >
+                {mode === 'clouds' ? 'PRECIPITATION' : mode.toUpperCase()}
+              </button>
+            ))}
+          </div>
+          <button 
+            onClick={() => setCloudsTileOn(!cloudsTileOn)} 
+            className={`flex items-center justify-center w-9 h-9 rounded-full bg-[rgba(10,14,26,0.85)] border border-[rgba(255,255,255,0.08)] shadow-[0_8px_32px_rgba(0,0,0,0.4)] backdrop-blur-md transition-all ${cloudsTileOn ? 'bg-[#304865] text-[#c3f5ff]' : 'text-[#8a96ad] hover:text-[#dce4e5]'}`}
+            title="Toggle Clouds Tile"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM19 18H6c-2.21 0-4-1.79-4-4s1.79-4 4-4h.71C7.37 7.69 9.48 6 12 6c3.04 0 5.5 2.46 5.5 5.5v.5H19c1.66 0 3 1.34 3 3s-1.34 3-3 3z"/>
+            </svg>
+          </button>
         </div>
       </div>
       
@@ -510,11 +529,11 @@ export default function MaritimeDashboard() {
       <div className={`absolute bottom-6 left-[80px] z-20 transition-all duration-300 ${activeNav === 'Weather' && activeTopTab === 'TACTICAL' ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}>
         <div className="bg-[rgba(10,14,26,0.75)] border border-[rgba(255,255,255,0.12)] rounded-xl p-4 backdrop-blur-md text-[#dfe6f0] text-[11px] w-[260px] shadow-[0_8px_32px_rgba(0,0,0,0.4)]">
           <div className="font-semibold mb-2 text-[#f2f5fa]">
-            {weatherLayer === 'wind' ? 'Wind (Bft)' : weatherLayer === 'clouds' ? 'Cloud Cover (%)' : weatherLayer === 'storm' ? 'Storm/Precipitation (mm/h)' : 'Pressure (hPa)'}
+            {weatherLayer === 'wind' ? 'Wind (Bft)' : weatherLayer === 'clouds' ? 'Precipitation (mm/h)' : weatherLayer === 'storm' ? 'Storm/Precipitation (mm/h)' : 'Pressure (hPa)'}
           </div>
           <div className="w-full h-[9px] rounded-[5px] my-1.5" style={{
             background: weatherLayer === 'wind' ? 'linear-gradient(to right, rgb(35,70,170) 0%, rgb(35,150,185) 25%, rgb(70,185,120) 41.7%, rgb(190,215,80) 58.3%, rgb(230,180,60) 75%, rgb(230,120,50) 83.3%, rgb(210,70,50) 91.7%, rgb(150,30,40) 100%)' :
-                        weatherLayer === 'clouds' ? 'linear-gradient(to right, rgb(50,60,80) 0%, rgb(100,110,130) 25%, rgb(150,160,180) 50%, rgb(200,210,220) 75%, rgb(240,245,255) 100%)' :
+                        weatherLayer === 'clouds' ? 'linear-gradient(to right, rgb(10,30,50) 0%, rgb(100,150,250) 20%, rgb(50,100,220) 40%, rgb(20,50,180) 60%, rgb(150,50,150) 80%, rgb(255,0,0) 100%)' :
                         weatherLayer === 'storm' ? 'linear-gradient(to right, rgb(10,30,50) 0%, rgb(100,150,250) 20%, rgb(50,100,220) 40%, rgb(20,50,180) 60%, rgb(150,50,150) 80%, rgb(255,0,0) 100%)' :
                         'linear-gradient(to right, rgb(40,60,150) 0%, rgb(70,110,190) 20%, rgb(140,180,210) 40%, rgb(225,220,200) 60%, rgb(220,150,90) 80%, rgb(190,70,50) 100%)'
           }}></div>
@@ -522,7 +541,7 @@ export default function MaritimeDashboard() {
             {weatherLayer === 'wind' ? (
               <><span>0</span><span>3</span><span>5</span><span>7</span><span>9</span><span>10</span><span>11</span><span>12</span></>
             ) : weatherLayer === 'clouds' ? (
-              <><span>0</span><span>25</span><span>50</span><span>75</span><span>100</span></>
+              <><span>0</span><span>0.5</span><span>2</span><span>5</span><span>10</span><span>20+</span></>
             ) : weatherLayer === 'storm' ? (
               <><span>0</span><span>0.5</span><span>2</span><span>5</span><span>10</span><span>20+</span></>
             ) : (
