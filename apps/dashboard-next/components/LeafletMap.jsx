@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { WindParticleLayer, GradientFieldLayer, windSample, tempSample, humSample, pressSample, tempStops, humidityStops, pressureStops, windStops, weatherGrid } from './weatherLayers';
+import { WindParticleLayer, GradientFieldLayer, windSample, tempSample, humSample, cloudsSample, cloudStops, rainSample, pressSample, tempStops, humidityStops, pressureStops, stormStops, windStops, weatherGrid } from './weatherLayers';
 import { io, Socket } from 'socket.io-client';
 import * as turf from '@turf/turf';
 
@@ -440,6 +440,11 @@ export default function LeafletMap({
   demoMode = false,
   weatherLayer = null,
   realWeather = null,
+  cloudsTileOn = false,
+  // Gate the hover inspector — only true while the user is on the
+  // Weather tab. Defaults to true so it works as a drop-in, but the
+  // dashboard flips it false whenever Weather isn't the active view.
+  enableHoverInspector = true,
 }) {
   const mapRef = useRef(null);
   const mapInstanceRef = useRef(null);
@@ -468,6 +473,72 @@ export default function LeafletMap({
   const trajectoryPolylineRef = useRef(null);
   const bathymetryLayerRef = useRef(null);
   const [showBathymetry, setShowBathymetry] = useState(false);
+
+  // ── Weather hover inspector ────────────────────────────────────────────
+  // Shows a small callout next to the cursor with the live weather value
+  // at that lat/lng for the currently active layer (wind/clouds/…).
+  const [inspector, setInspector] = useState(null); // { x, y, lat, lng, primary, secondary, palette }
+  const lastInspectorMoveRef = useRef(0);
+  // Ref so the map-level mousemove handler always sees the latest
+  // weatherLayer value even though the map-creation effect runs once.
+  const weatherLayerRef = useRef(weatherLayer);
+  useEffect(() => {
+    weatherLayerRef.current = weatherLayer;
+    // When the layer changes, clear any stale callout so the user isn't
+    // seeing leftover text for the previous layer.
+    setInspector(null);
+  }, [weatherLayer]);
+  // Same for the inspector gate (Weather tab is active or not).
+  const inspectorEnabledRef = useRef(enableHoverInspector);
+  useEffect(() => {
+    inspectorEnabledRef.current = enableHoverInspector;
+    // Drop any visible callout the moment we leave the Weather tab so it
+    // doesn't linger into the next view.
+    if (!enableHoverInspector) setInspector(null);
+  }, [enableHoverInspector]);
+
+  // Format a wind speed (m/s) into a Beaufort description + compass heading.
+  const bftDescribe = (mps) => {
+    const kts = mps * 1.94384;
+    const bft = Math.min(12, Math.max(0, Math.round(
+      mps < 0.3 ? 0 :
+      mps < 1.5 ? 1 :
+      mps < 3.3 ? 2 :
+      mps < 5.4 ? 3 :
+      mps < 7.9 ? 4 :
+      mps < 10.7 ? 5 :
+      mps < 13.8 ? 6 :
+      mps < 17.1 ? 7 :
+      mps < 20.7 ? 8 :
+      mps < 24.4 ? 9 :
+      mps < 28.4 ? 10 :
+      mps < 32.6 ? 11 : 12
+    )));
+    const names = [
+      'Calm', 'Light Air', 'Light Breeze', 'Gentle Breeze',
+      'Moderate Breeze', 'Fresh Breeze', 'Strong Breeze', 'Near Gale',
+      'Gale', 'Strong Gale', 'Storm', 'Violent Storm', 'Hurricane Force',
+    ];
+    return { bft, name: names[bft], kts };
+  };
+
+  const compassArrow = (deg) => {
+    if (deg == null || Number.isNaN(deg)) return '↑';
+    const arrows = ['↑','↗','→','↘','↓','↙','←','↖'];
+    return arrows[Math.round(((deg % 360) / 45)) % 8];
+  };
+
+  // Convert a Beaufort number to the 8-bit windStops colour.
+  const windPaletteFor = (bft) => {
+    const stops = [
+      [35,70,170],[35,150,185],[70,185,120],[190,215,80],
+      [230,180,60],[230,120,50],[210,70,50],[150,30,40],
+    ];
+    if (bft <= 1) return stops[0];
+    if (bft <= 4) return stops[2];
+    if (bft <= 6) return stops[4];
+    return stops[6];
+  };
 
   const normalizeZone = (zone) => {
     if (zone === 'SAFE' || zone === 'WARNING' || zone === 'DANGER') return zone;
@@ -1097,6 +1168,81 @@ export default function LeafletMap({
     // Now upsert the initial boat after map is ready
     upsertBoat(initialBoat, { shouldPan: false });
 
+    // ── Weather hover inspector ────────────────────────────────────────
+    // Read the active weather value at the cursor's lat/lng and show a
+    // small callout. Throttled to ~30 fps so we don't sample the wind grid
+    // on every pixel of mouse movement.
+    const inspectorMove = (e) => {
+      // Bail early when the Weather tab isn't active — keeps the rest of
+      // the dashboard (Fleet / Sensors / Threats / etc.) free of the
+      // floating callout.
+      if (!inspectorEnabledRef.current) {
+        setInspector(null);
+        return;
+      }
+      const now = performance.now();
+      if (now - lastInspectorMoveRef.current < 33) return;
+      lastInspectorMoveRef.current = now;
+
+      const { lat, lng } = e.latlng;
+      const layer = weatherLayerRef.current;
+      const t = performance.now() / 1000;
+
+      let primary = '';
+      let secondary = '';
+      let palette = [220, 240, 255];
+      let sub = `${lat.toFixed(2)}°${lat >= 0 ? 'N' : 'S'}, ${lng.toFixed(2)}°${lng >= 0 ? 'E' : 'W'}`;
+
+      if (layer === 'wind') {
+        const s = windSample(lng, lat, t);
+        const { bft, name, kts } = bftDescribe(s.value);
+        const bearing = (Math.atan2(s.u, -s.v) * 180) / Math.PI; // direction wind blows TOWARD
+        const fromBearing = (bearing + 180) % 360;                // meteorological "from"
+        primary = `${name}`;
+        secondary = `${bft} Bft  ${compassArrow(fromBearing)} ${Math.round(fromBearing)}°`;
+        palette = windPaletteFor(bft);
+        sub = `${kts.toFixed(1)} kts · ${sub}`;
+      } else if (layer === 'clouds') {
+        const s = rainSample(lng, lat, t);
+        primary = `${s.value.toFixed(1)} mm/h`;
+        secondary = 'Precipitation';
+        palette = s.value > 10 ? [200,50,150] : s.value > 2 ? [50,150,250] : [100,200,250];
+      } else if (layer === 'storm') {
+        const s = rainSample(lng, lat, t);
+        primary = `${s.value.toFixed(1)} mm/h`;
+        secondary = s.value >= 10 ? 'Heavy' : s.value >= 2 ? 'Moderate' : s.value > 0 ? 'Light' : 'None';
+        palette = s.value >= 10 ? [255,0,0] : s.value >= 2 ? [50,100,220] : s.value > 0 ? [100,150,250] : [10,30,50];
+      } else if (layer === 'pressure') {
+        const s = pressSample(lng, lat, t);
+        primary = `${Math.round(s.value)} hPa`;
+        secondary = s.value < 1000 ? 'Low' : s.value > 1020 ? 'High' : 'Normal';
+        palette = s.value < 1000 ? [40,60,150] : s.value > 1020 ? [190,70,50] : [140,180,210];
+      } else {
+        // No weather layer active — just show coordinates.
+        primary = '—';
+        secondary = 'Select a weather layer';
+        palette = [100, 200, 255];
+      }
+
+      // Position: offset to the right of the cursor, flip to the left if
+      // near the right edge so the callout never gets clipped.
+      const w = mapRef.current?.clientWidth || 0;
+      const flipX = e.containerPoint.x > w - 180;
+      const x = flipX ? e.containerPoint.x - 14 : e.containerPoint.x + 14;
+      const y = e.containerPoint.y + 14;
+
+      setInspector({ x, y, lat, lng, primary, secondary, palette, sub });
+    };
+
+    const inspectorOut = () => setInspector(null);
+
+    mapRef.current.addEventListener('mouseleave', inspectorOut);
+    // L.Leaflet fires 'mousemove' with .latlng and .containerPoint on
+    // every cursor move — that's all we need, so don't double-bind the DOM
+    // mousemove (which would deliver a plain MouseEvent without latlng).
+    map.on('mousemove', inspectorMove);
+    map.on('mouseout', inspectorOut);
+
     // Leaflet needs invalidateSize after flex layout settles.
     // Stop auto-following when user manually pans or zooms.
     const handleDragStart = () => {
@@ -1307,6 +1453,12 @@ export default function LeafletMap({
       window.clearTimeout(invalidateTimeoutShort);
       window.clearTimeout(invalidateTimeoutLong);
       ro.disconnect();
+      // Inspector listeners — Leaflet handles mousemove; DOM owns mouseleave.
+      if (mapRef.current) {
+        mapRef.current.removeEventListener('mouseleave', inspectorOut);
+      }
+      map.off('mousemove', inspectorMove);
+      map.off('mouseout', inspectorOut);
       map.off('dragstart', handleDragStart);
       if (trajectoryPolylineRef.current) {
         trajectoryPolylineRef.current.remove();
@@ -1546,6 +1698,35 @@ export default function LeafletMap({
   const weatherLayerInstanceRef = useRef(null);
   const rafRef = useRef(null);
   const weatherGridRefreshRef = useRef(null);
+  // H/L centre markers — drawn only while the pressure layer is active.
+  const pressureMarkersRef = useRef([]);
+  const pressureRefreshTimerRef = useRef(null);
+  // Storm-cell overlay (circles + halos + lightning icons + track polylines).
+  const stormCellLayersRef = useRef([]);
+  const stormRefreshTimerRef = useRef(null);
+  const cloudsTileLayerRef = useRef(null);
+
+  useEffect(() => {
+    if (!mapInstanceRef.current) return;
+    const map = mapInstanceRef.current;
+    
+    if (cloudsTileOn) {
+      if (!cloudsTileLayerRef.current) {
+        cloudsTileLayerRef.current = L.tileLayer('https://tile.openweathermap.org/map/clouds_new/{z}/{x}/{y}.png?appid=a63a66e50c1159983af837acb9e4efa8', {
+          maxZoom: 18,
+          opacity: 0.6,
+          attribution: '&copy; OpenWeatherMap'
+        });
+      }
+      if (!map.hasLayer(cloudsTileLayerRef.current)) {
+        cloudsTileLayerRef.current.addTo(map);
+      }
+    } else {
+      if (cloudsTileLayerRef.current && map.hasLayer(cloudsTileLayerRef.current)) {
+        map.removeLayer(cloudsTileLayerRef.current);
+      }
+    }
+  }, [cloudsTileOn]);
 
   useEffect(() => {
     const map = mapInstanceRef.current;
@@ -1560,13 +1741,171 @@ export default function LeafletMap({
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     }
-    
+
+    // Drop any pressure H/L markers left over from a previous view.
+    for (const m of pressureMarkersRef.current) {
+      try { map.removeLayer(m); } catch (_) {}
+    }
+    pressureMarkersRef.current = [];
+    if (pressureRefreshTimerRef.current) {
+      clearInterval(pressureRefreshTimerRef.current);
+      pressureRefreshTimerRef.current = null;
+    }
+
+    // Custom Leaflet div-icon for an H / L centre — black rounded box,
+    // white text, with a tiny downward arrow so it reads as a label rather
+    // than a marker. Mirrors the reference synoptic-chart pins.
+    const buildPressureIcon = (type, pressure) => {
+      const label = `${Math.round(pressure)} hPa`;
+      const html = `
+        <div style="display:flex;flex-direction:column;align-items:center;pointer-events:none;">
+          <div style="background:#0b1117;color:#fff;font:600 11px/1 'JetBrains Mono',monospace;padding:4px 8px;border-radius:4px;border:1px solid rgba(255,255,255,0.18);box-shadow:0 2px 6px rgba(0,0,0,0.45);white-space:nowrap;letter-spacing:0.04em;">
+            <span style="opacity:0.85;margin-right:4px;">${type}</span>${label}
+          </div>
+          <div style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:6px solid #0b1117;margin-top:-1px;"></div>
+        </div>`;
+      return L.divIcon({
+        html,
+        className: 'pressure-centre-icon',
+        iconSize: [70, 28],
+        iconAnchor: [35, 28],
+      });
+    };
+
+    const renderPressureCentres = () => {
+      // Remove existing markers first so we don't pile up across moveends.
+      for (const m of pressureMarkersRef.current) {
+        try { map.removeLayer(m); } catch (_) {}
+      }
+      pressureMarkersRef.current = [];
+
+      const centres = weatherGrid.findPressureCentres();
+      for (const c of centres) {
+        const m = L.marker([c.lat, c.lng], { icon: buildPressureIcon(c.type, c.pressure), interactive: false });
+        m.addTo(map);
+        pressureMarkersRef.current.push(m);
+      }
+    };
+
+    // ── Storm cells ───────────────────────────────────────────────────
+    // For each local precipitation maximum, render a coloured halo circle,
+    // a forecast-track polyline (orange dots), and a couple of lightning
+    // bolt icons inside the cell. Sizes scale with map zoom so the markers
+    // stay readable as you pan / zoom.
+    const cellColour = (mm) => {
+      if (mm >= 10) return '#ff2810';
+      if (mm >= 5)  return '#d83cb0';
+      if (mm >= 2)  return '#5a46dc';
+      if (mm >= 0.6) return '#2b80f0';
+      return '#7eb6ee';
+    };
+    const buildLightningIcon = () => L.divIcon({
+      html: '<div style="font: 700 14px/1 sans-serif; color: #fff7c0; text-shadow: 0 0 4px #ffae00, 0 0 1px #000; transform: translate(-50%, -100%); pointer-events: none;">⚡</div>',
+      className: 'storm-lightning-icon',
+      iconSize: [16, 16],
+      iconAnchor: [8, 16],
+    });
+
+    const renderStormCells = () => {
+      // Tear down previous layer
+      for (const obj of stormCellLayersRef.current) {
+        try { map.removeLayer(obj); } catch (_) {}
+      }
+      stormCellLayersRef.current = [];
+
+      const cells = weatherGrid.findStormCells();
+      const zoom = map.getZoom();
+      // Size grows at low zoom (so cells stay visible at country scale)
+      // and shrinks at high zoom (so they don't blot out a city).
+      const zoomFactor = Math.max(0, Math.min(1, (8 - zoom) / 6));
+      const baseRadius = 12000 + zoomFactor * 22000; // metres
+
+      for (const c of cells) {
+        const r = baseRadius * (0.7 + Math.min(1.6, c.intensity / 6));
+        const colour = cellColour(c.intensity);
+
+        // Halo circle.
+        const halo = L.circle([c.lat, c.lng], {
+          radius: r,
+          color: colour,
+          weight: 2,
+          opacity: 0.85,
+          fillColor: colour,
+          fillOpacity: 0.18,
+          interactive: false,
+        });
+        halo.addTo(map);
+        stormCellLayersRef.current.push(halo);
+
+        // Forecast track — simple westward drift (good enough for a demo,
+        // and matches how tropical cells in the Indian Ocean typically move).
+        // Each cell gets a 7-step polyline showing the next ~6h.
+        const trackPoints = [];
+        for (let k = 0; k < 7; k++) {
+          trackPoints.push([c.lat + (Math.random() - 0.5) * 0.4, c.lng - k * 0.6 - 0.1]);
+        }
+        const track = L.polyline(trackPoints, {
+          color: '#ffae00',
+          weight: 2.5,
+          opacity: 0.9,
+          dashArray: '2,4',
+          interactive: false,
+        });
+        track.addTo(map);
+        stormCellLayersRef.current.push(track);
+
+        // Coloured dots on the track.
+        for (const p of trackPoints) {
+          const dot = L.circleMarker(p, {
+            radius: 3 + Math.min(3, c.intensity / 4),
+            color: '#ff7a1a',
+            weight: 1,
+            fillColor: '#ffae00',
+            fillOpacity: 1,
+            interactive: false,
+          });
+          dot.addTo(map);
+          stormCellLayersRef.current.push(dot);
+        }
+
+        // A couple of lightning bolts inside the cell.
+        const boltCount = Math.min(4, 1 + Math.floor(c.intensity / 2));
+        for (let b = 0; b < boltCount; b++) {
+          // Random offset in degrees, scaled by radius
+          const dLat = (Math.random() - 0.5) * (r / 110000);
+          const dLng = (Math.random() - 0.5) * (r / 90000);
+          const bolt = L.marker([c.lat + dLat, c.lng + dLng], {
+            icon: buildLightningIcon(),
+            interactive: false,
+          });
+          bolt.addTo(map);
+          stormCellLayersRef.current.push(bolt);
+        }
+      }
+    };
+
     let gridTimeout = null;
     const refreshWeather = () => {
       clearTimeout(gridTimeout);
       gridTimeout = setTimeout(async () => {
         if(!mapInstanceRef.current) return;
         await weatherGrid.refreshGrid(mapInstanceRef.current.getBounds(), 8, 6);
+        // Pressure: refresh the GFS grid + redraw the colour gradient
+        // field and the H/L centre markers.
+        if (weatherLayer === 'pressure') {
+          await weatherGrid.refreshPressureGrid(mapInstanceRef.current.getBounds(), 8, 6);
+          renderPressureCentres();
+        }
+        // Clouds: refresh the cloud_cover grid (no cells, just the field).
+        if (weatherLayer === 'clouds') {
+          await weatherGrid.refreshCloudGrid(mapInstanceRef.current.getBounds(), 10, 8);
+        }
+        // Storm: refresh the precipitation grid + rebuild storm cells
+        // (the only place rain cells + halos are drawn).
+        if (weatherLayer === 'storm') {
+          await weatherGrid.refreshPrecipGrid(mapInstanceRef.current.getBounds(), 10, 8);
+          renderStormCells();
+        }
         const layers = weatherLayerInstanceRef.current;
         if(layers){
            const arr = Array.isArray(layers) ? layers : [layers];
@@ -1583,20 +1922,46 @@ export default function LeafletMap({
       if (weatherLayer === 'wind') {
         layers.push(new WindParticleLayer(windSample, { particleCount: 1800, speedFactor: 1.2 }));
       } else if (weatherLayer === 'clouds') {
-        layers.push(new GradientFieldLayer(cloudsSample, cloudsStops, { opacity: 0.65, cellSize: 4, blur: 5 }));
+        // CLOUDS tab: cloud cover (%) from Open-Meteo GFS — separate from
+        // the storm ramp so precipitation stays exclusive to STORM.
+        layers.push(new GradientFieldLayer(cloudsSample, cloudStops, { opacity: 0.75, cellSize: 4, blur: 5 }));
       } else if (weatherLayer === 'storm') {
+        // STORM tab: precipitation field (mm/h) + storm cells, drawn from
+        // the precip grid. Only place the user sees rain intensity.
         layers.push(new GradientFieldLayer(rainSample, stormStops, { opacity: 0.8, cellSize: 4, blur: 4 }));
       } else if (weatherLayer === 'pressure') {
+        // PRESSURE: a thin colour gradient so the synoptic pattern reads
+        // at a glance, plus the H/L pin markers. No isobars, no labels on
+        // the field itself — the pins carry the labelled highs/lows.
         layers.push(new GradientFieldLayer(pressSample, pressureStops, {
-          contourLevels: [975, 985, 995, 1005, 1015, 1025, 1035, 1045],
-          opacity: 0.8, cellSize: 4, blur: 4
+          opacity: 0.55, cellSize: 4, blur: 6
         }));
+        // Auto-refresh the pressure grid every 30 min — Open-Meteo GFS
+        // updates hourly, so half that is plenty fresh.
+        pressureRefreshTimerRef.current = setInterval(() => {
+          if (!mapInstanceRef.current) return;
+          weatherGrid.refreshPressureGrid(mapInstanceRef.current.getBounds(), 8, 6).then(() => {
+            renderPressureCentres();
+          });
+        }, 30 * 60 * 1000);
+        // Auto-refresh storm cells every 15 minutes so the storm layer
+        // tracks live GFS updates without the user panning.
+        stormRefreshTimerRef.current = setInterval(() => {
+          if (!mapInstanceRef.current) return;
+          weatherGrid.refreshPrecipGrid(mapInstanceRef.current.getBounds(), 10, 8).then(() => {
+            renderStormCells();
+            const arr = Array.isArray(weatherLayerInstanceRef.current) ? weatherLayerInstanceRef.current : [weatherLayerInstanceRef.current];
+            arr.forEach(l => { if (l._redraw) l._redraw(); });
+          });
+        }, 15 * 60 * 1000);
+        // Re-render storm cells on zoom so the radius/halo scale correctly.
+        map.on('zoomend', renderStormCells);
       }
 
       if (layers.length > 0) {
         weatherLayerInstanceRef.current = layers;
         layers.forEach(l => map.addLayer(l));
-        
+
         // Initial fetch
         if (weatherGridRefreshRef.current) weatherGridRefreshRef.current();
 
@@ -1617,6 +1982,7 @@ export default function LeafletMap({
 
     return () => {
       map.off('moveend', refreshWeather);
+      clearTimeout(gridTimeout);
       if (weatherLayerInstanceRef.current) {
         const currentLayers = Array.isArray(weatherLayerInstanceRef.current) ? weatherLayerInstanceRef.current : [weatherLayerInstanceRef.current];
         currentLayers.forEach(l => map.removeLayer(l));
@@ -1626,7 +1992,24 @@ export default function LeafletMap({
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
-    };
+      for (const m of pressureMarkersRef.current) {
+        try { map.removeLayer(m); } catch (_) {}
+      }
+      pressureMarkersRef.current = [];
+      if (pressureRefreshTimerRef.current) {
+        clearInterval(pressureRefreshTimerRef.current);
+        pressureRefreshTimerRef.current = null;
+      }
+      for (const layer of stormCellLayersRef.current) {
+        try { map.removeLayer(layer); } catch (_) {}
+      }
+      stormCellLayersRef.current = [];
+      if (stormRefreshTimerRef.current) {
+        clearInterval(stormRefreshTimerRef.current);
+        stormRefreshTimerRef.current = null;
+      }
+      map.off('zoomend', renderStormCells);
+    }
   }, [weatherLayer]);
 
   // Dedicated unmount cleanup
@@ -1636,6 +2019,10 @@ export default function LeafletMap({
         const currentLayers = Array.isArray(weatherLayerInstanceRef.current) ? weatherLayerInstanceRef.current : [weatherLayerInstanceRef.current];
         currentLayers.forEach(l => mapInstanceRef.current.removeLayer(l));
         weatherLayerInstanceRef.current = null;
+      }
+      if (cloudsTileLayerRef.current && mapInstanceRef.current) {
+        mapInstanceRef.current.removeLayer(cloudsTileLayerRef.current);
+        cloudsTileLayerRef.current = null;
       }
     };
   }, []);
@@ -1654,8 +2041,57 @@ export default function LeafletMap({
       <div
         ref={mapRef}
         className="w-full h-full"
-        style={{ minHeight: '520px', borderRadius: '1rem' }}
+        style={{
+          minHeight: '520px',
+          borderRadius: '1rem',
+          // Crosshair cursor when hovering a weather layer makes the
+          // "this spot has a value" affordance obvious — only while the
+          // Weather tab is the active view.
+          cursor: enableHoverInspector && weatherLayer ? 'crosshair' : undefined,
+        }}
       />
+
+      {/* ── Weather hover inspector callout ───────────────────────────── */}
+      {inspector && (
+        <div
+          className="absolute pointer-events-none z-[1100]"
+          style={{
+            left: inspector.x,
+            top: inspector.y,
+            transform: 'translate(0, 0)',
+            willChange: 'transform',
+          }}
+        >
+          <div
+            className="rounded-md px-2.5 py-1.5 shadow-[0_8px_24px_rgba(0,0,0,0.55)] backdrop-blur-md border border-white/15 min-w-[140px]"
+            style={{
+              background: `linear-gradient(180deg, rgba(8,14,22,0.92), rgba(8,14,22,0.82))`,
+              borderTop: `2px solid rgb(${inspector.palette.join(',')})`,
+            }}
+          >
+            {/* Top row: layer name (primary) */}
+            <div className="flex items-center gap-1.5">
+              <span
+                className="inline-block w-1.5 h-1.5 rounded-full"
+                style={{ background: `rgb(${inspector.palette.join(',')})`, boxShadow: `0 0 6px rgb(${inspector.palette.join(',')})` }}
+              />
+              <span className="text-[12px] font-bold tracking-wide text-white whitespace-nowrap">
+                {inspector.primary}
+              </span>
+            </div>
+            {/* Sub-row: secondary (Bft + arrow, % etc) */}
+            {inspector.secondary && (
+              <div className="text-[11px] text-white/80 mt-0.5 font-mono whitespace-nowrap">
+                {inspector.secondary}
+              </div>
+            )}
+            {/* Lat/Lng */}
+            <div className="text-[10px] text-white/55 mt-1 font-mono whitespace-nowrap">
+              {inspector.sub}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="absolute bottom-[90px] right-[10px] z-[1000]">
         <div className="flex flex-col items-center gap-2">
