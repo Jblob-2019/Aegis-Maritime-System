@@ -5,7 +5,16 @@ FROM node:22-alpine AS builder
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci && npm cache clean --force
+# Try npm ci (reproducible). Fall back to npm install when the lockfile
+# is out of sync with package.json (e.g. transient missing packages).
+RUN set -e; \
+    if npm ci --no-audit --no-fund; then \
+      echo "✅ npm ci succeeded"; \
+    else \
+      echo "⚠️  npm ci failed — falling back to npm install"; \
+      npm install --no-audit --no-fund; \
+    fi; \
+    npm cache clean --force
 
 COPY . .
 RUN npm run build
