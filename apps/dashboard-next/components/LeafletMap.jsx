@@ -392,21 +392,100 @@ function getMidpointLatLngFromFeature(feature) {
   return null;
 }
 
-// ─── Demo Mode Route (SAFE near coast → WARNING → DANGER farther offshore → back) ──
-const DEMO_WAYPOINTS = [
-  { lat: 9.8, lon: 79.1 },
-  { lat: 9.7, lon: 79.15 },
-  { lat: 9.6, lon: 79.22 },
-  { lat: 9.5, lon: 79.32 },
-  { lat: 9.4, lon: 79.4 },
-  { lat: 9.3, lon: 79.48 },
-  { lat: 9.22, lon: 79.53 },
-  { lat: 9.3, lon: 79.48 }, // Turning back
-  { lat: 9.4, lon: 79.4 }, // WARNING again
-  { lat: 9.5, lon: 79.32 },
-  { lat: 9.6, lon: 79.22 }, // Back to SAFE
-  { lat: 9.7, lon: 79.15 },
+// ─── Demo Mode Fleet ─────────────────────────────────────────────────────
+// 10 support boats roaming in random patterns around the IMBL
+// boundary. Each gets its own RNG-seeded loop so they desynchronise
+// instead of all bunching together.
+//
+// Per-boat roam corridors. Latitude range 8.6 → 10.2 keeps every boat
+// in the sea (clears the TN coastline bulge near lat 9.3). Longitude
+// corridors line up with the perpendicular distance from the IMBL
+// boundary so each boat lives in its assigned zone band:
+//
+//   At lat 9.3, IMBL is at lon 79.50. Working back from there:
+//     DANGER  → lon 79.45-79.49   (0-5 km west of IMBL)
+//     WARNING → lon 79.39-79.45   (5-12 km west)
+//     ALERT   → lon 79.32-79.39   (12-20 km west)
+//     SAFE    → lon 79.20-79.30   (further west, near coast)
+//
+// IMBL boundary. Each gets its own RNG-seeded loop so they desynchronise
+// instead of all bunching together.
+function seedRng(seed) {
+  // Mulberry32 — tiny, fast, good enough for visual jitter.
+  let s = seed >>> 0;
+  return function () {
+    s = (s + 0x6D2B79F5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function buildRoamRoute(rng, opts) {
+  // Roam inside the corridor. Each leg is short and points in a random
+  // direction so the boat drifts within its assigned zone instead of
+  // tracing straight lines.
+  const legs = [];
+  const { minLat, maxLat, minLon, maxLon, maxLegDeg = 0.05 } = opts;
+  let lat = minLat + rng() * (maxLat - minLat);
+  let lon = minLon + rng() * (maxLon - minLon);
+  legs.push({ lat, lon });
+  for (let i = 0; i < 24; i++) {
+    const dLat = (rng() - 0.5) * maxLegDeg;
+    const dLon = (rng() - 0.5) * maxLegDeg;
+    lat = Math.max(minLat, Math.min(maxLat, lat + dLat));
+    lon = Math.max(minLon, Math.min(maxLon, lon + dLon));
+    legs.push({ lat, lon });
+  }
+  legs.push({ lat: legs[0].lat, lon: legs[0].lon });
+  return buildDemoRoute(legs, 30);
+}
+
+// Per-boat roam corridors. Latitude range 8.6 → 10.2 keeps every boat
+// in the sea (clears the TN coastline bulge near lat 9.3). Longitude
+// corridors line up with the perpendicular distance from the IMBL
+// boundary so each boat lives in its assigned zone band:
+//
+//   At lat 9.3, IMBL is at lon 79.50. Working back from there:
+//     DANGER  → lon 79.45-79.49   (0-5 km west of IMBL)
+//     WARNING → lon 79.39-79.45   (5-12 km west)
+//     ALERT   → lon 79.32-79.39   (12-20 km west)
+//     SAFE    → lon 79.20-79.30   (further west, near coast)
+//
+const DEMO_FLEET_CORRIDORS = [
+  // 3 ALERT boats (12-20 km from IMBL)
+  { zone: 'ALERT',   minLat: 8.6, maxLat: 10.2, minLon: 79.32, maxLon: 79.39, maxLegDeg: 0.05 },
+  { zone: 'ALERT',   minLat: 8.6, maxLat: 10.2, minLon: 79.32, maxLon: 79.39, maxLegDeg: 0.06 },
+  { zone: 'ALERT',   minLat: 8.6, maxLat: 10.2, minLon: 79.32, maxLon: 79.39, maxLegDeg: 0.04 },
+  // 3 WARNING boats (5-12 km from IMBL)
+  { zone: 'WARNING', minLat: 8.6, maxLat: 10.2, minLon: 79.39, maxLon: 79.45, maxLegDeg: 0.05 },
+  { zone: 'WARNING', minLat: 8.6, maxLat: 10.2, minLon: 79.39, maxLon: 79.45, maxLegDeg: 0.06 },
+  { zone: 'WARNING', minLat: 8.6, maxLat: 10.2, minLon: 79.39, maxLon: 79.45, maxLegDeg: 0.04 },
+  // 3 DANGER boats (0-5 km from IMBL)
+  { zone: 'DANGER',  minLat: 8.6, maxLat: 10.2, minLon: 79.45, maxLon: 79.49, maxLegDeg: 0.04 },
+  { zone: 'DANGER',  minLat: 8.6, maxLat: 10.2, minLon: 79.45, maxLon: 79.49, maxLegDeg: 0.05 },
+  { zone: 'DANGER',  minLat: 8.6, maxLat: 10.2, minLon: 79.45, maxLon: 79.49, maxLegDeg: 0.03 },
+  // 1 SAFE boat (further west, near the coast but still in the sea)
+  { zone: 'SAFE',    minLat: 8.7, maxLat: 10.0, minLon: 79.20, maxLon: 79.30, maxLegDeg: 0.05 },
 ];
+
+const DEMO_FLEET_BOATS = DEMO_FLEET_CORRIDORS.map((corridor, i) => {
+  const rng = seedRng(0xA3C5_0001 + i * 7919);
+  const route = buildRoamRoute(rng, corridor);
+  return {
+    boatId: `DEMO-${String(i + 2).padStart(2, '0')}`,
+    route,
+    // Stagger each boat by a different offset so they don't all hit
+    // the same waypoint at the same tick.
+    phaseOffset: i * Math.floor(route.length / 10),
+    // Each boat moves at a slightly different cadence.
+    speedMs: 220 + (i % 5) * 60,
+    // Pin the boat's zone to its corridor so the narrative stays clean
+    // even if a route step happens to land just outside the band.
+    forceZone: corridor.zone,
+  };
+});
 
 // Interpolate many small steps between each waypoint for smooth movement
 function buildDemoRoute(waypoints, stepsPerSegment) {
@@ -424,8 +503,6 @@ function buildDemoRoute(waypoints, stepsPerSegment) {
   }
   return result;
 }
-
-const DEMO_ROUTE = buildDemoRoute(DEMO_WAYPOINTS, 40);
 
 export default function LeafletMap({
   onLocationUpdate,
@@ -473,6 +550,10 @@ export default function LeafletMap({
   const trajectoryPolylineRef = useRef(null);
   const bathymetryLayerRef = useRef(null);
   const [showBathymetry, setShowBathymetry] = useState(false);
+  // Hover-only EEZ/boundary labels — populated on polyline hover,
+  // cleared when the cursor leaves. Keeps the map calm until the
+  // user actually wants to inspect a zone.
+  const zoneLabelsRef = useRef(new Map());
 
   // ── Weather hover inspector ────────────────────────────────────────────
   // Shows a small callout next to the cursor with the live weather value
@@ -1021,6 +1102,12 @@ export default function LeafletMap({
         }
 
         const offsetFeatures = buildImblOffsetFeatures(imblGeoJson);
+
+        // zoneLabelsRef is the per-component Map of currently-shown EEZ
+        // labels. Initialised once in the ref declaration; reused on
+        // every re-render so hover-out can remove its entry.
+        const labelForOffset = zoneLabelsRef.current;
+
         offsetFeatures.forEach((offset) => {
           const offsetLines = getLineStringsFromFeature(offset.feature);
           if (offsetLines.length === 0) {
@@ -1031,34 +1118,47 @@ export default function LeafletMap({
             return;
           }
 
-          try {
-            const offsetLayer = safeAddLayer(
-              'imbl-offset',
-              L.featureGroup(
-                offsetLines.map((line) =>
-                  L.polyline(line, {
-                    color: offset.color,
-                    weight: 2,
-                    dashArray: '5, 5',
-                    interactive: false,
-                  })
-                )
-              ),
-              {
-                name: offset.name,
-                distanceKm: offset.distanceKm,
-              }
-            );
-            if (offsetLayer) visibleLimitCount += 1;
-          } catch (error) {
-            const message =
-              error instanceof Error ? error.message : String(error);
-            console.warn('Invalid IMBL offset geometry', {
-              name: offset.name,
-              distanceKm: offset.distanceKm,
-              error: message,
-            });
-          }
+          // The zone offset polyline is now INTERACTIVE — hovering it
+          // (or its label) reveals the zone label. The IMBL main line +
+          // coastline stay non-interactive so they don't steal hover
+          // events from the vessel markers.
+          const polylines = offsetLines.map((line) =>
+            L.polyline(line, {
+              color: offset.color,
+              weight: 2.5,
+              dashArray: '5, 5',
+              // A wider invisible hit-area makes the thin dashed line
+              // easier to grab with the cursor without changing how it
+              // looks.
+              interactive: true,
+              bubblingMouseEvents: false,
+              // L.polygon-style soft hit-padding works via pathOptions
+              // for SVG; we approximate with a slightly heavier stroke
+              // and a transparent outer "halo" polyline below.
+            })
+          );
+
+          // Invisible "hit halo" — a wider, fully transparent polyline
+          // underneath the dashed one so the user doesn't need pixel-
+          // perfect aim. Pointer events on the halo bubble up to the
+          // dashed line above.
+          const hitLines = offsetLines.map((line) =>
+            L.polyline(line, {
+              color: offset.color,
+              weight: 16,
+              opacity: 0,
+              interactive: true,
+              bubblingMouseEvents: false,
+              className: 'imbl-offset-hitarea',
+            })
+          );
+
+          const offsetLayer = safeAddLayer(
+            'imbl-offset',
+            L.featureGroup([...polylines, ...hitLines]),
+            { name: offset.name, distanceKm: offset.distanceKm }
+          );
+          if (offsetLayer) visibleLimitCount += 1;
 
           const mid = getMidpointLatLngFromFeature(offset.feature);
           if (!mid || !mid.every(Number.isFinite)) {
@@ -1070,23 +1170,92 @@ export default function LeafletMap({
             return;
           }
 
-          try {
+          // Build the label marker but keep it OFF the map by default.
+          // We add it lazily on hover and remove it on hover-out. The
+          // marker position tracks the cursor (not the line's midpoint)
+          // so it always shows up *at* the pointer — that's where the
+          // user is looking.
+          let labelMarker = null;
+          let hideTimer = null;
+          const buildLabelMarker = () =>
             L.marker(mid, {
               icon: L.divIcon({
-                className: 'eez-label',
-                html: `<div style="background:${offset.color};color:#fff;padding:4px 9px;border-radius:7px;font-size:12px;white-space:nowrap;box-shadow:0 2px 10px rgba(0,0,0,0.45);font-weight:700;border:1px solid rgba(255,255,255,0.3);">${offset.name} (${offset.distanceKm} km)</div>`,
+                className: 'eez-label eez-label--hidden',
+                html: `<div style="background:${offset.color};color:#fff;padding:5px 11px;border-radius:7px;font-size:12px;white-space:nowrap;box-shadow:0 4px 14px rgba(0,0,0,0.55);font-weight:700;border:1px solid rgba(255,255,255,0.35);letter-spacing:0.02em;">${offset.name} (${offset.distanceKm} km)</div>`,
                 iconSize: [180, 28],
                 iconAnchor: [90, 14],
               }),
-            }).addTo(map);
-          } catch (error) {
-            const message =
-              error instanceof Error ? error.message : String(error);
-            console.warn('[browser] Invalid IMBL offset label', {
-              name: offset.name,
-              distanceKm: offset.distanceKm,
-              error: message,
+              // Non-interactive so the label doesn't trap hover events
+              // meant for the line below it.
+              interactive: false,
+              keyboard: false,
+              riseOnHover: true,
             });
+
+          // Place (or move) the label at the cursor's lat/lng and make
+          // sure it's visible. Called on every mousemove while the
+          // pointer is over one of the line/hit-halo paths.
+          const placeLabel = (latlng) => {
+            if (!map || !latlng) return;
+            if (hideTimer) {
+              clearTimeout(hideTimer);
+              hideTimer = null;
+            }
+            if (!labelMarker) {
+              labelMarker = buildLabelMarker();
+              labelForOffset.set(offset.name, labelMarker);
+              labelMarker.addTo(map);
+              requestAnimationFrame(() => {
+                const el = labelMarker?.getElement();
+                if (el) el.classList.remove('eez-label--hidden');
+              });
+            } else if (!map.hasLayer(labelMarker)) {
+              labelMarker.addTo(map);
+              requestAnimationFrame(() => {
+                const el = labelMarker?.getElement();
+                if (el) el.classList.remove('eez-label--hidden');
+              });
+            }
+            // Anchor the label exactly on the pointer.
+            labelMarker.setLatLng(latlng);
+            const el = labelMarker.getElement();
+            if (el) el.classList.remove('eez-label--hidden');
+            // Visual feedback on the line: bump weight + opacity so the
+            // user can see which zone they inspected.
+            for (const pl of polylines) {
+              pl.setStyle({ weight: 3.5, opacity: 1 });
+            }
+          };
+
+          const scheduleHide = () => {
+            // 80ms grace window — if the cursor moves between the dashed
+            // line and its invisible hit-halo, the mouseout/mouseover
+            // events fire in quick succession and we don't want the
+            // label to flicker. The same grace period covers the case
+            // where the user crosses from one zone to another.
+            if (hideTimer) clearTimeout(hideTimer);
+            hideTimer = setTimeout(() => {
+              hideTimer = null;
+              if (labelMarker && map && map.hasLayer(labelMarker)) {
+                map.removeLayer(labelMarker);
+              }
+              labelForOffset.delete(offset.name);
+              labelMarker = null;
+              for (const pl of polylines) {
+                pl.setStyle({ weight: 2.5, opacity: 0.85 });
+              }
+            }, 80);
+          };
+
+          for (const pl of [...polylines, ...hitLines]) {
+            // mousemove fires on every cursor pixel — perfect for
+            // re-anchoring the label to wherever the pointer is on the
+            // line.
+            pl.on('mousemove', (e) => placeLabel(e.latlng));
+            // mouseover fires once when the pointer enters the path
+            // — useful as the initial "show" trigger.
+            pl.on('mouseover', (e) => placeLabel(e.latlng));
+            pl.on('mouseout', scheduleHide);
           }
         });
       }
@@ -1144,14 +1313,6 @@ export default function LeafletMap({
         }, 100);
       });
 
-    // Initial selected vessel fallback
-    const initialBoat = {
-      boatId: selectedBoatIdRef.current || 'BOAT1',
-      lat: 9.8,
-      lon: 79.1,
-      zone: 'SAFE',
-    };
-
     // Path trail polyline
     const pathPolyline = L.polyline([], {
       color: '#38bdf8',
@@ -1165,8 +1326,11 @@ export default function LeafletMap({
 
     mapInstanceRef.current = map;
 
-    // Now upsert the initial boat after map is ready
-    upsertBoat(initialBoat, { shouldPan: false });
+    // No placeholder boat on mount — the demo-mode effect seeds the
+    // demo fleet, and in non-demo mode the backend socket populates
+    // real vessels via the initial REST fetch + 'locationUpdate'
+    // events. Avoids the floating "BOAT1" default the user kept
+    // seeing when nothing was connected.
 
     // ── Weather hover inspector ────────────────────────────────────────
     // Read the active weather value at the cursor's lat/lng and show a
@@ -1445,6 +1609,42 @@ export default function LeafletMap({
       .status-warning { background: #fff55b !important; box-shadow: 0 0 18px #fff55b; }
       .status-danger { background: #ff4a4a !important; box-shadow: 0 0 18px #ff4a4a; }
       .status-unknown { background: #38bdf8 !important; box-shadow: 0 0 14px #38bdf8; }
+
+      /* ── EEZ / zone boundary hover affordances ─────────────────── */
+      /* The hit-halo polylines are zero-opacity, but their cursor
+         should still signal "interactive" — otherwise users don't know
+         the dashed zone lines are hoverable. */
+      .imbl-offset-hitarea {
+        cursor: help;
+      }
+      /* The dashed zone lines themselves also signal interactivity on
+         hover. The line is 2.5px which is small, so the help cursor
+         on the surrounding hit-halo is the primary cue. */
+      .leaflet-overlay-pane path[stroke-dasharray]:hover {
+        cursor: help;
+      }
+      /* Zone labels are built off-map and added on hover. They fade
+         in via a small CSS transition for a softer feel. */
+      .eez-label {
+        background: transparent !important;
+        border: none !important;
+        opacity: 0;
+        transform: translateY(4px) scale(0.96);
+        transition:
+          opacity 160ms ease-out,
+          transform 180ms cubic-bezier(.2,.7,.3,1.2);
+        pointer-events: none;
+      }
+      .eez-label > div {
+        transform-origin: center;
+      }
+      /* When the label is added to the map we drop the hidden class so
+         the opacity transition plays. pointer-events stays disabled so
+         the marker doesn't intercept events aimed at the line below. */
+      .eez-label:not(.eez-label--hidden) {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
     `;
     document.head.appendChild(style);
     styleElRef.current = style;
@@ -1463,6 +1663,13 @@ export default function LeafletMap({
       if (trajectoryPolylineRef.current) {
         trajectoryPolylineRef.current.remove();
         trajectoryPolylineRef.current = null;
+      }
+      // Drop any hover-revealed EEZ labels so they don't outlive the map.
+      if (zoneLabelsRef?.current) {
+        for (const m of zoneLabelsRef.current.values()) {
+          try { map.removeLayer(m); } catch (_) {}
+        }
+        zoneLabelsRef.current.clear();
       }
       if (styleElRef.current) {
         styleElRef.current.remove();
@@ -1639,6 +1846,9 @@ export default function LeafletMap({
   ]);
 
   // ─── Demo Mode ─────────────────────────────────────────────────────────────
+  // Drives a 10-boat support fleet roaming randomly around the IMBL
+  // boundary. Each boat moves at its own per-boat cadence via phase
+  // offsets so the batch doesn't jitter synchronously.
   useEffect(() => {
     if (!demoMode) {
       if (demoIntervalRef.current) {
@@ -1651,31 +1861,87 @@ export default function LeafletMap({
     pathRef.current = [];
     pathPolylineRef.current?.setLatLngs([]);
     demoIndexRef.current = 0;
-    setIsTracking(true);
-    onStatusUpdate?.('Demo Mode Active');
+
+    // Seed the demo fleet so all boats appear at their starting positions
+    // on tick 0 (otherwise the first appearance depends on each boat's
+    // phaseOffset and they pop in over the first few seconds).
+    const seedBoat = (boat, idx) => {
+      const pt = boat.route[idx % boat.route.length];
+      if (!pt) return;
+      upsertBoat(
+        {
+          boatId: boat.boatId,
+          lat: pt.lat,
+          lon: pt.lon,
+          zone: boat.forceZone || 'SAFE',
+        },
+        { shouldPan: false }
+      );
+    };
+    DEMO_FLEET_BOATS.forEach((b, i) => seedBoat(b, b.phaseOffset));
+
+    // Per-boat cursors for the support fleet. Keep them on refs so the
+    // tick closure stays cheap.
+    const fleetIndexRef = { current: 0 };
+    const fleetTicksRef = {
+      current: DEMO_FLEET_BOATS.map((b, i) => ({
+        idx: b.phaseOffset % b.route.length,
+        ticksUntilNext: i % 3, // stagger the first tick too
+      })),
+    };
 
     demoIntervalRef.current = setInterval(() => {
       if (!mapInstanceRef.current) return;
-      const point = DEMO_ROUTE[demoIndexRef.current];
-      const lat = point.lat;
-      const lng = point.lon;
-      const demoBoatId = 'DEMO-BOAT1';
-      selectedBoatIdRef.current = demoBoatId;
-      primaryPathBoatIdRef.current = demoBoatId;
-      const demoZone = getZoneFromDistance(
-        calculateDistanceToImblBoundary(lat, lng)
-      );
-      upsertBoat(
-        {
-          boatId: demoBoatId,
-          lat,
-          lon: lng,
-          zone: geofenceZoneToBoatZone(demoZone),
-        },
-        { shouldPan: true }
-      );
-      demoIndexRef.current = (demoIndexRef.current + 1) % DEMO_ROUTE.length;
+      // ── Support fleet ────────────────────────────────────────────
+      // Only advance a single fleet boat per tick so the whole batch
+      // doesn't jitter synchronously. We round-robin through them.
+      for (let i = 0; i < DEMO_FLEET_BOATS.length; i++) {
+        const boat = DEMO_FLEET_BOATS[i];
+        const state = fleetTicksRef.current[i];
+        // Each fleet boat moves every Nth tick — driven by speedMs.
+        // We translate the desired ms cadence into a "move every Nth
+        // tick" using a simple accumulator.
+        const ticksPerStep = Math.max(1, Math.round(boat.speedMs / 250));
+        if (state.idx === undefined) state.idx = boat.phaseOffset;
+        if (state.ticksUntilNext === undefined) state.ticksUntilNext = i % ticksPerStep;
+        if (state.ticksUntilNext > 0) {
+          state.ticksUntilNext -= 1;
+          continue;
+        }
+        state.ticksUntilNext = ticksPerStep - 1;
+
+        const routePoint = boat.route[state.idx];
+        if (routePoint) {
+          // Pin each support boat to its corridor's zone. Without this,
+          // boats roaming near corridor edges would flicker between
+          // WARNING and DANGER as they crossed the band boundary on
+          // individual ticks.
+          const zone = boat.forceZone
+            ? boat.forceZone
+            : geofenceZoneToBoatZone(
+                getZoneFromDistance(
+                  calculateDistanceToImblBoundary(routePoint.lat, routePoint.lon)
+                )
+              );
+          upsertBoat(
+            {
+              boatId: boat.boatId,
+              lat: routePoint.lat,
+              lon: routePoint.lon,
+              zone,
+            },
+            { shouldPan: false }
+          );
+        }
+        state.idx = (state.idx + 1) % boat.route.length;
+      }
+
+      fleetIndexRef.current =
+        (fleetIndexRef.current + 1) % DEMO_FLEET_BOATS.length;
     }, 250);
+
+    setIsTracking(true);
+    onStatusUpdate?.('Demo Mode Active (10 boats)');
 
     return () => {
       if (demoIntervalRef.current) {

@@ -84,8 +84,10 @@ export default function MaritimeDashboard() {
   const [selectedBoat, setSelectedBoat] = useState(null);
   const [demoMode, setDemoMode] = useState(false);
   const [serverStatus, setServerStatus] = useState('Connecting...');
+  // Right-side push-style alerts. Fired when any boat (real backend
+  // OR demo fleet) crosses into the WARNING boundary line. Up to 4
+  // visible at once; older ones fall off the bottom of the stack.
   const [toasts, setToasts] = useState([]);
-  const [showDangerModal, setShowDangerModal] = useState(false);
   const [cmdInput, setCmdInput] = useState('');
   const [systemStability, setSystemStability] = useState(99.8);
   const [logisticsData, setLogisticsData] = useState({ totalSupplyCarriers: 0, networkStatus: 'UNKNOWN', vessels: [] });
@@ -209,8 +211,83 @@ export default function MaritimeDashboard() {
     setSelectedBoatId(boat.boatId);
   }, []);
 
+  const addAlert = useCallback((msg, level) => {
+    const entry = { id: Date.now().toString(), time: fmtTime(), message: msg, level };
+    setAlerts(prev => [entry, ...prev.slice(0, 29)]);
+  }, []);
+
+  // Track per-boat zone transitions so we can write a quiet line into
+  // the bell-icon notifications panel AND fire a right-side push
+  // notification when any vessel crosses into the WARNING (or DANGER)
+  // boundary line. Throttled per boat+zone so the 250 ms demo tick
+  // doesn't spam.
+  const lastZoneByBoatRef = useRef(new Map());
+  const lastAlertAtRef = useRef(new Map());
+
+  // Push a self-contained alert card onto the right-side toast stack.
+  // Auto-dismisses after `durationMs` (default 6 s).
+  const pushWarningToast = useCallback((boatId, zone) => {
+    const id = `t-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const isDanger = zone === 'DANGER';
+    setToasts(prev => [
+      ...prev,
+      {
+        id,
+        boatId,
+        zone,
+        title: isDanger ? 'DANGER ZONE BREACH' : 'WARNING LINE CROSSED',
+        body: isDanger
+          ? `${boatId} crossed into DANGER zone.`
+          : `${boatId} reached the WARNING boundary line.`,
+        durationMs: 6000,
+        createdAt: Date.now(),
+      },
+    ]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 6000);
+  }, []);
+
   const handleBoatsUpdate = useCallback((nextBoats) => {
       setBoats(nextBoats);
+
+      // Per-boat zone history: log every upgrade transition into the
+      // bell-icon notifications panel, AND fire a right-side push
+      // toast when the boat reaches WARNING (or DANGER) — the user
+      // explicitly asked for a popup on the WARNING line.
+      const history = lastZoneByBoatRef.current;
+      const lastAlert = lastAlertAtRef.current;
+      const now = Date.now();
+      const RANK = { SAFE: 0, ALERT: 1, WARNING: 2, DANGER: 3 };
+      for (const b of nextBoats) {
+        const prev = history.get(b.boatId) ?? 'SAFE';
+        const next = b.zone ?? 'SAFE';
+        if (prev === next) continue;
+        history.set(b.boatId, next);
+        const prevRank = RANK[prev] ?? 0;
+        const nextRank = RANK[next] ?? 0;
+        if (nextRank <= prevRank) continue;
+        if (next === 'SAFE') continue;
+        const key = `${b.boatId}|${next}`;
+        const lastAt = lastAlert.get(key) ?? 0;
+        if (now - lastAt < 8000) continue;
+        lastAlert.set(key, now);
+        addAlert(
+          `Vessel ${b.boatId} entered ${next} zone.`,
+          next === 'DANGER' ? 'danger' : next === 'WARNING' ? 'warning' : 'info'
+        );
+        // Right-side push popup on WARNING line breach (and on
+        // DANGER, since DANGER > WARNING). ALERT is too noisy to
+        // pop up — it just gets a quiet log entry.
+        if (next === 'WARNING' || next === 'DANGER') {
+          pushWarningToast(b.boatId, next);
+        }
+      }
+      // Garbage-collect: forget boats that have left the fleet.
+      for (const key of history.keys()) {
+        if (!nextBoats.some(b => b.boatId === key)) history.delete(key);
+      }
+
       if (!selectedBoatId && nextBoats.length > 0) {
         setSelectedBoatId(nextBoats[0].boatId);
         setSelectedBoat(nextBoats[0]);
@@ -222,7 +299,7 @@ export default function MaritimeDashboard() {
           setSelectedBoat(selected);
         }
       }
-  }, [selectedBoatId]);
+  }, [selectedBoatId, addAlert, pushWarningToast]);
 
   // Backend connection & polling
   useEffect(() => {
@@ -336,29 +413,15 @@ export default function MaritimeDashboard() {
   const currentSpeed = selectedBoat?.speed ?? 0;
   const nearestEEZ = 'SCS-ZONE-7B';
 
-  const addToast = useCallback((msg, zone) => {
-    const id = Date.now().toString();
-    setToasts(prev => [...prev, { id, message: msg, zone }]);
-    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
-  }, []);
-
-  const addAlert = useCallback((msg, level) => {
-    const entry = { id: Date.now().toString(), time: fmtTime(), message: msg, level };
-    setAlerts(prev => [entry, ...prev.slice(0, 29)]);
-  }, []);
-
-  // Zone transition toasts
-  useEffect(() => {
+  // Zone transition for the SELECTED boat's proximity banner (top of screen).
+// The push-toast system in handleBoatsUpdate already covers every vessel.
+useEffect(() => {
     const prev = previousZoneRef.current;
     if (currentZone !== prev && currentZone !== 'UNKNOWN' && prev !== 'UNKNOWN') {
-       if (currentZone === 'DANGER' || currentZone === 'WARNING' || currentZone === 'ALERT') {
-          addToast(`${selectedBoat?.boatId || 'Vessel'} entered ${currentZone}`, currentZone);
-          addAlert(`Vessel ${selectedBoat?.boatId || 'UNKNOWN'} entered ${currentZone} zone.`, currentZone === 'DANGER' ? 'danger' : currentZone === 'WARNING' ? 'warning' : 'info');
-          if (currentZone === 'DANGER') setShowDangerModal(true);
-       }
+      // No-op — keep the ref in sync so the next comparison is fresh.
     }
     previousZoneRef.current = currentZone;
-  }, [currentZone, selectedBoat, addToast, addAlert]);
+  }, [currentZone]);
 
   const filteredBoats = vesselId ? boats.filter(b => b.boatId.toLowerCase().includes(vesselId.toLowerCase())) : boats;
 
@@ -376,12 +439,7 @@ export default function MaritimeDashboard() {
     { label: 'Live Feed', icon: <svg viewBox="0 0 24 24" className="w-[19px] h-[20px]"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z" fill="currentColor"/></svg> },
   ];
 
-  const alertLevel = boats.reduce((worst, b) => {
-    const rank = { SAFE: 0, ALERT: 1, WARNING: 2, DANGER: 3 };
-    return rank[b.zone] > rank[worst] ? b.zone : worst;
-  }, 'SAFE');
-
-  const isConnected = serverStatus === 'Backend Connected' || serverStatus === 'Demo Mode Active';
+  const isConnected = serverStatus === 'Backend Connected' || serverStatus === 'Demo Mode Active (11 boats)' || serverStatus === 'Demo Mode Active';
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-[#020817]" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
@@ -429,12 +487,6 @@ export default function MaritimeDashboard() {
         
 <div className="flex-1 flex justify-center pointer-events-none"></div>
 
-        <div className="flex items-center gap-3 px-4 py-1.5 rounded-md border text-[11px] font-bold tracking-widest shadow-inner shrink-0"
-          style={{ borderColor: zoneColor(alertLevel), color: zoneColor(alertLevel), background: zoneBg(alertLevel) }}>
-          <span className="animate-pulse-dot">⚠</span>
-          ALERT LEVEL: {alertLevel === 'SAFE' ? 'GREEN' : alertLevel === 'ALERT' ? 'BLUE' : alertLevel === 'WARNING' ? 'YELLOW' : 'RED'}
-        </div>
-        
         <div className="flex items-center gap-4 ml-2 shrink-0">
           {/* Settings */}
           <div className="relative flex items-center">
@@ -851,22 +903,85 @@ export default function MaritimeDashboard() {
                       placeholder="SEARCH ID..."
                       className="w-full bg-[rgba(10,14,26,0.6)] border border-[rgba(255,255,255,0.08)] rounded-lg px-4 py-2 text-[11px] text-[#dce4e5] outline-none focus:border-[rgba(0,218,243,0.5)] transition-colors" />
                  </div>
-                 {filteredBoats.length === 0 && <div className="text-[#5a6478] text-[11px] text-center mt-4">No vessels found</div>}
-                 {filteredBoats.map(b => (
-                    <button key={b.boatId} onClick={() => {setSelectedBoat(b); setSelectedBoatId(b.boatId);}}
-                      className={`w-full text-left rounded-lg border transition-all cursor-pointer ${selectedBoatId === b.boatId ? 'bg-[rgba(0,218,243,0.12)] border-[rgba(0,218,243,0.4)] shadow-[inset_0_0_15px_rgba(0,218,243,0.1)]' : 'bg-[rgba(10,15,20,0.5)] border-[rgba(59,73,76,0.4)] hover:border-[rgba(195,245,255,0.3)] hover:bg-[rgba(25,35,40,0.6)]'}`}>
-                      <div className="flex items-center gap-3.5 p-3">
-                        <div className="w-1.5 h-8 rounded-full shrink-0" style={{ background: statusColor(b.status) }} />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between">
-                            <span className="text-[#dce4e5] text-[12px] font-bold tracking-widest truncate">{b.boatId}</span>
-                            <span className="text-[9px] shrink-0 font-semibold tracking-wider" style={{ color: statusColor(b.status) }}>{b.status}</span>
-                          </div>
-                          <div className="text-[#8a96ad] text-[10px] mt-1 truncate">{b.type} | {b.group}</div>
-                        </div>
-                      </div>
-                    </button>
-                 ))}
+
+                 {/* Demo-mode fleet grid — replaces the regular vessel
+                     cards while demo mode is active. Two-column grid
+                     of zone-coloured chips, each clickable to select
+                     the boat. Demo boats don't carry status/type/group
+                     fields, so the regular card layout would render
+                     empty anyway. */}
+                 {demoMode ? (
+                   <div className="grid grid-cols-2 gap-2">
+                     {boats.length === 0 && (
+                       <div className="col-span-2 text-[#5a6478] text-[11px] text-center mt-4">
+                         NO VESSELS
+                       </div>
+                     )}
+                     {boats.map((b) => {
+                       const isSelected = selectedBoatId === b.boatId;
+                       const color = zoneColor(b.zone);
+                       const bg = zoneBg(b.zone);
+                       const isAlert = b.zone === 'WARNING' || b.zone === 'DANGER' || b.zone === 'ALERT';
+                       return (
+                         <button
+                           key={b.boatId}
+                           onClick={() => {
+                             setSelectedBoatId(b.boatId);
+                             setSelectedBoat(b);
+                           }}
+                           title={`${b.boatId} — ${b.zone}`}
+                           className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-left cursor-pointer transition-all ${
+                             isSelected
+                               ? 'shadow-[0_0_14px_rgba(56,189,248,0.4)] scale-[1.02]'
+                               : 'opacity-90 hover:opacity-100 hover:scale-[1.01]'
+                           }`}
+                           style={{
+                             borderColor: isSelected ? color : `${color}80`,
+                             color: '#dce4e5',
+                             background: isSelected
+                               ? `linear-gradient(135deg, ${bg}, ${bg.replace('0.3', '0.45').replace('0.4', '0.55')})`
+                               : bg,
+                             borderWidth: isSelected ? '1.5px' : '1px',
+                           }}
+                         >
+                           <span
+                             className={`w-2 h-2 rounded-full shrink-0 ${
+                               isAlert ? 'animate-pulse' : ''
+                             }`}
+                             style={{ background: color, boxShadow: `0 0 8px ${color}` }}
+                           />
+                           <div className="flex-1 min-w-0">
+                             <div className="text-[#c3f5ff] text-[11px] font-bold tracking-widest truncate">
+                               {b.boatId}
+                             </div>
+                             <div className="text-[10px] tracking-wider truncate" style={{ color }}>
+                               {b.zone}
+                             </div>
+                           </div>
+                         </button>
+                       );
+                     })}
+                   </div>
+                 ) : (
+                   <>
+                     {filteredBoats.length === 0 && <div className="text-[#5a6478] text-[11px] text-center mt-4">No vessels found</div>}
+                     {filteredBoats.map(b => (
+                       <button key={b.boatId} onClick={() => {setSelectedBoat(b); setSelectedBoatId(b.boatId);}}
+                         className={`w-full text-left rounded-lg border transition-all cursor-pointer ${selectedBoatId === b.boatId ? 'bg-[rgba(0,218,243,0.12)] border-[rgba(0,218,243,0.4)] shadow-[inset_0_0_15px_rgba(0,218,243,0.1)]' : 'bg-[rgba(10,15,20,0.5)] border-[rgba(59,73,76,0.4)] hover:border-[rgba(195,245,255,0.3)] hover:bg-[rgba(25,35,40,0.6)]'}`}>
+                         <div className="flex items-center gap-3.5 p-3">
+                           <div className="w-1.5 h-8 rounded-full shrink-0" style={{ background: statusColor(b.status) }} />
+                           <div className="flex-1 min-w-0">
+                             <div className="flex items-center justify-between">
+                               <span className="text-[#dce4e5] text-[12px] font-bold tracking-widest truncate">{b.boatId}</span>
+                               <span className="text-[9px] shrink-0 font-semibold tracking-wider" style={{ color: statusColor(b.status) }}>{b.status}</span>
+                             </div>
+                             <div className="text-[#8a96ad] text-[10px] mt-1 truncate">{b.type} | {b.group}</div>
+                           </div>
+                         </div>
+                       </button>
+                     ))}
+                   </>
+                 )}
               </div>
             </div>
 
@@ -976,14 +1091,26 @@ export default function MaritimeDashboard() {
             <span className="text-[#00ff95] text-[11px] font-bold">{systemStability.toFixed(1)}%</span>
           </div>
           <div className="flex items-center gap-4 mb-3 text-[10px]">
+            {/* LED + BUZZER mirror the SELECTED boat's zone so the
+                Threats panel reads the same boundary state as the
+                map. Selecting a different boat swaps the values. */}
             <div className="flex items-center gap-2">
               <span className="text-[#8a96ad] font-bold tracking-widest">LED</span>
-              <span className="font-bold" style={{ color: isConnected ? '#00ff95' : '#ef4444' }}>{isConnected ? 'ONLINE' : 'OFFLINE'}</span>
+              <span className="font-bold" style={{ color: zoneColor(currentZone) }}>
+                {currentZone === 'SAFE' ? 'IDLE' : currentZone === 'ALERT' ? 'CAUTION' : currentZone === 'WARNING' ? 'ADVISE' : 'ALARM'}
+              </span>
             </div>
             <div className="w-[1px] h-3 bg-[rgba(59,73,76,0.6)]" />
             <div className="flex items-center gap-2">
               <span className="text-[#8a96ad] font-bold tracking-widest">BUZZER</span>
-              <span className="font-bold" style={{ color: currentZone === 'DANGER' ? '#ef4444' : '#bac9cc' }}>{currentZone === 'DANGER' ? 'ACTIVE' : 'STANDBY'}</span>
+              <span className="font-bold" style={{ color: (currentZone === 'DANGER' || currentZone === 'WARNING') ? zoneColor(currentZone) : '#bac9cc' }}>
+                {currentZone === 'DANGER' ? 'ACTIVE — FAST' : currentZone === 'WARNING' ? 'ACTIVE — SLOW' : 'STANDBY'}
+              </span>
+            </div>
+            <div className="w-[1px] h-3 bg-[rgba(59,73,76,0.6)]" />
+            <div className="flex items-center gap-1.5">
+              <span className="text-[#8a96ad] font-bold tracking-widest">VESSEL</span>
+              <span className="text-[#c3f5ff] font-bold tracking-wider">{selectedBoat?.boatId ?? '—'}</span>
             </div>
           </div>
           <div className="bg-[rgba(2,8,23,0.6)] h-1.5 rounded-full overflow-hidden shadow-inner">
@@ -1193,14 +1320,49 @@ export default function MaritimeDashboard() {
         
         {/* Indicators */}
         <div className="flex items-center gap-3">
+          {/* LED + buzzer mirror the SELECTED boat's current boundary
+              level only — selecting a different vessel swaps the
+              indicators. The LED colour ladder:
+                SAFE    → green (idle)
+                ALERT   → cyan (caution)
+                WARNING → orange (advise)
+                DANGER  → red (alarm)
+              The buzzer pulses on WARNING (slow) and DANGER (fast). */}
           <div className="flex items-center gap-1.5">
             <span className="text-[10px] tracking-widest font-bold">LED</span>
-            <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-[#00ff95] shadow-[0_0_8px_#00ff95]' : 'bg-[#ef4444] shadow-[0_0_8px_#ef4444]'}`} />
+            <div
+              className="w-2 h-2 rounded-full"
+              style={{
+                background: zoneColor(currentZone),
+                boxShadow: `0 0 8px ${zoneColor(currentZone)}`,
+              }}
+            />
           </div>
           <div className="flex items-center gap-1.5">
             <span className="text-[10px] tracking-widest font-bold">BUZZER</span>
-            <div className={`w-2 h-2 rounded-full ${currentZone === 'DANGER' ? 'bg-[#ef4444] shadow-[0_0_8px_#ef4444] animate-pulse' : 'bg-[rgba(255,255,255,0.2)]'}`} />
+            <div
+              className={`w-2 h-2 rounded-full ${
+                currentZone === 'WARNING' || currentZone === 'DANGER' ? 'animate-pulse' : ''
+              }`}
+              style={{
+                background:
+                  currentZone === 'WARNING' || currentZone === 'DANGER'
+                    ? zoneColor(currentZone)
+                    : 'rgba(255,255,255,0.2)',
+                boxShadow:
+                  currentZone === 'WARNING' || currentZone === 'DANGER'
+                    ? `0 0 8px ${zoneColor(currentZone)}`
+                    : 'none',
+                // Faster pulse for DANGER, slower for WARNING. CSS
+                // animation-duration supports string seconds.
+                animationDuration:
+                  currentZone === 'DANGER' ? '0.4s' : '1.2s',
+              }}
+            />
           </div>
+          <span className="text-[10px] tracking-widest text-[#8a96ad]">
+            VESSEL: <span className="text-[#c3f5ff] font-bold">{selectedBoat?.boatId ?? '—'}</span>
+          </span>
         </div>
         <span className="text-[rgba(59,73,76,0.4)]">|</span>
         
@@ -1208,44 +1370,6 @@ export default function MaritimeDashboard() {
         <span className="text-[rgba(59,73,76,0.4)]">|</span>
         <span className="text-[#00daf3] font-semibold tracking-widest cursor-pointer hover:text-white transition-colors">LIVE FEEDS</span>
       </footer>
-      )}
-
-      {/* ── Toast Notifications ── */}
-      <div className="fixed top-4 right-4 z-[3000] flex flex-col gap-2 pointer-events-none">
-        {toasts.map(t => (
-          <div key={t.id} className="animate-slide-in bg-[rgba(10,14,26,0.92)] border rounded-xl px-5 py-4 text-[12px] backdrop-blur-md pointer-events-auto shadow-2xl"
-            style={{ borderColor: zoneColor(t.zone), color: zoneColor(t.zone) }}>
-            <span className="font-bold mr-2 text-[14px]">⚡ ZONE CHANGE</span>
-            <div className="mt-1 text-[#dce4e5] opacity-90">{t.message}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* ── Danger Modal ── */}
-      {showDangerModal && (
-        <div className="fixed inset-0 z-[3200] bg-[rgba(0,0,0,0.85)] flex items-center justify-center animate-fade-in backdrop-blur-md pointer-events-auto">
-          <div className="bg-[rgba(10,15,20,0.95)] border border-[#ef4444] rounded-2xl p-8 max-w-md w-full mx-4 animate-danger-pulse shadow-[0_0_50px_rgba(239,68,68,0.3)]">
-            <div className="flex items-center gap-4 mb-4">
-               <div className="w-12 h-12 rounded-full bg-[rgba(239,68,68,0.15)] flex items-center justify-center text-[#ef4444] text-[24px]">⚠</div>
-               <div className="text-[#ef4444] text-[22px] font-bold" style={{ fontFamily: "'Space Grotesk', sans-serif", letterSpacing: '0.04em' }}>
-                 DANGER ZONE BREACH
-               </div>
-            </div>
-            <div className="text-[#dce4e5] text-[13px] mb-8 leading-relaxed opacity-90">
-              A vessel has entered a DANGER zone. Immediate operator action required. Verify vessel identity and initiate emergency protocols.
-            </div>
-            <div className="flex gap-4">
-              <button onClick={() => setShowDangerModal(false)}
-                className="flex-1 py-3.5 bg-[#ef4444] text-white text-[12px] font-bold rounded-xl hover:bg-[#dc2626] tracking-widest cursor-pointer shadow-[0_4px_15px_rgba(239,68,68,0.4)] transition-all">
-                ACKNOWLEDGE
-              </button>
-              <button onClick={() => { addAlert('Emergency recall signal transmitted.', 'danger'); setShowDangerModal(false) }}
-                className="flex-1 py-3.5 bg-[rgba(239,68,68,0.1)] border border-[#ef4444] text-[#ef4444] text-[12px] font-bold rounded-xl hover:bg-[rgba(239,68,68,0.2)] tracking-widest cursor-pointer transition-all">
-                RECALL ALL
-              </button>
-            </div>
-          </div>
-        </div>
       )}
 
       {/* ── Zone Alert Banner ── */}
@@ -1258,6 +1382,66 @@ export default function MaritimeDashboard() {
            'ALERT: Vessel in proximity alert zone — monitor boundary distance'}
         </div>
       )}
+
+      {/* ── Right-side push notifications (WARNING line alerts) ──
+          Fires whenever any boat (real backend OR demo fleet) crosses
+          into the WARNING (or DANGER) zone. Stacks at the top-right
+          corner, newest at the bottom, up to 4 visible at once. */}
+      <div className="fixed top-20 right-4 z-[3000] flex flex-col-reverse gap-2 pointer-events-none w-[340px]">
+        {toasts.slice(-4).map(t => {
+          const color = zoneColor(t.zone);
+          const bg = zoneBg(t.zone);
+          const icon = t.zone === 'DANGER' ? '⚠' : '⚡';
+          return (
+            <div
+              key={t.id}
+              className="pointer-events-auto rounded-xl overflow-hidden border shadow-[0_18px_40px_rgba(0,0,0,0.55)] backdrop-blur-md animate-slide-in"
+              style={{
+                background: 'linear-gradient(180deg, rgba(10,16,28,0.95), rgba(6,12,22,0.92))',
+                borderColor: `${color}80`,
+              }}
+            >
+              {/* Coloured top accent line */}
+              <div
+                className="h-[3px] w-full"
+                style={{ background: `linear-gradient(90deg, ${color}, ${color}55)` }}
+              />
+              <div className="px-4 py-3 flex gap-3 items-start">
+                <div
+                  className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 text-[16px] font-bold"
+                  style={{ background: bg, color, boxShadow: `0 0 14px ${color}55` }}
+                >
+                  {icon}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2 mb-0.5">
+                    <span className="text-[10px] tracking-widest text-[#8a96ad] font-bold uppercase">
+                      AEGIS · BOUNDARY ALERT
+                    </span>
+                    <button
+                      onClick={() => setToasts(prev => prev.filter(x => x.id !== t.id))}
+                      className="text-[#5a6478] hover:text-[#c3f5ff] text-[14px] leading-none cursor-pointer transition-colors"
+                      aria-label="Dismiss"
+                      title="Dismiss"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div
+                    className="text-[13px] font-bold tracking-wide leading-tight"
+                    style={{ color }}
+                  >
+                    {t.title}
+                  </div>
+                  <div className="text-[11px] text-[#dce4e5] mt-1 leading-snug opacity-90">
+                    {t.body}
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
 
     </div>
   );
