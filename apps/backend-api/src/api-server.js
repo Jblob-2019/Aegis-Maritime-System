@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url'
 import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
 import os from 'node:os'
+import fs from 'node:fs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -627,7 +628,12 @@ app.use((req, res, next) => {
   if (req.path.startsWith('/api')) {
     return next()
   }
-  res.sendFile(path.join(frontendBuildPath, 'index.html'))
+  const indexPath = path.join(frontendBuildPath, 'index.html')
+  if (fs.existsSync(indexPath)) {
+    res.sendFile(indexPath)
+  } else {
+    res.send('Aegis Backend is running! (Frontend build not found)')
+  }
 })
 
 // ---------------------------------------------------------------------------
