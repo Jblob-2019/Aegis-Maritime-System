@@ -1,5 +1,6 @@
 {
   "name": "aegis-dashboard-next",
+  "type": "module",
   "version": "0.1.0",
   "private": true,
   "engines": {
