@@ -401,8 +401,8 @@ function validateLocationPayload(body) {
   let distanceN = null
   if (distance !== undefined && distance !== null) {
     distanceN = toFiniteNumber(distance)
-    if (!Number.isFinite(distanceN) || distanceN < 0 || distanceN > 10000) {
-      return { ok: false, error: 'distance must be a non-negative finite number' }
+    if (!Number.isFinite(distanceN) || distanceN < 0 || distanceN > 1000000) {
+      return { ok: false, error: 'distance must be a non-negative finite number (max 1000000)' }
     }
   }
 
