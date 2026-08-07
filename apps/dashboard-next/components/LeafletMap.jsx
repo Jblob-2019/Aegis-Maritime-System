@@ -393,99 +393,25 @@ function getMidpointLatLngFromFeature(feature) {
 }
 
 // ─── Demo Mode Fleet ─────────────────────────────────────────────────────
-// 10 support boats roaming in random patterns around the IMBL
-// boundary. Each gets its own RNG-seeded loop so they desynchronise
-// instead of all bunching together.
-//
-// Per-boat roam corridors. Latitude range 8.6 → 10.2 keeps every boat
-// in the sea (clears the TN coastline bulge near lat 9.3). Longitude
-// corridors line up with the perpendicular distance from the IMBL
-// boundary so each boat lives in its assigned zone band:
-//
-//   At lat 9.3, IMBL is at lon 79.50. Working back from there:
-//     DANGER  → lon 79.45-79.49   (0-5 km west of IMBL)
-//     WARNING → lon 79.39-79.45   (5-12 km west)
-//     ALERT   → lon 79.32-79.39   (12-20 km west)
-//     SAFE    → lon 79.20-79.30   (further west, near coast)
-//
-// IMBL boundary. Each gets its own RNG-seeded loop so they desynchronise
-// instead of all bunching together.
-function seedRng(seed) {
-  // Mulberry32 — tiny, fast, good enough for visual jitter.
-  let s = seed >>> 0;
-  return function () {
-    s = (s + 0x6D2B79F5) >>> 0;
-    let t = s;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+// 10 support boats: 3 moving to DANGER, 7 roaming between SAFE and WARNING.
 
-function buildRoamRoute(rng, opts) {
-  // Roam inside the corridor. Each leg is short and points in a random
-  // direction so the boat drifts within its assigned zone instead of
-  // tracing straight lines.
-  const legs = [];
-  const { minLat, maxLat, minLon, maxLon, maxLegDeg = 0.05 } = opts;
-  let lat = minLat + rng() * (maxLat - minLat);
-  let lon = minLon + rng() * (maxLon - minLon);
-  legs.push({ lat, lon });
-  for (let i = 0; i < 24; i++) {
-    const dLat = (rng() - 0.5) * maxLegDeg;
-    const dLon = (rng() - 0.5) * maxLegDeg;
-    lat = Math.max(minLat, Math.min(maxLat, lat + dLat));
-    lon = Math.max(minLon, Math.min(maxLon, lon + dLon));
-    legs.push({ lat, lon });
-  }
-  legs.push({ lat: legs[0].lat, lon: legs[0].lon });
-  return buildDemoRoute(legs, 30);
-}
-
-// Per-boat roam corridors. Latitude range 8.6 → 10.2 keeps every boat
-// in the sea (clears the TN coastline bulge near lat 9.3). Longitude
-// corridors line up with the perpendicular distance from the IMBL
-// boundary so each boat lives in its assigned zone band:
-//
-//   At lat 9.3, IMBL is at lon 79.50. Working back from there:
-//     DANGER  → lon 79.45-79.49   (0-5 km west of IMBL)
-//     WARNING → lon 79.39-79.45   (5-12 km west)
-//     ALERT   → lon 79.32-79.39   (12-20 km west)
-//     SAFE    → lon 79.20-79.30   (further west, near coast)
-//
-const DEMO_FLEET_CORRIDORS = [
-  // 3 ALERT boats (12-20 km from IMBL)
-  { zone: 'ALERT',   minLat: 8.6, maxLat: 10.2, minLon: 79.32, maxLon: 79.39, maxLegDeg: 0.05 },
-  { zone: 'ALERT',   minLat: 8.6, maxLat: 10.2, minLon: 79.32, maxLon: 79.39, maxLegDeg: 0.06 },
-  { zone: 'ALERT',   minLat: 8.6, maxLat: 10.2, minLon: 79.32, maxLon: 79.39, maxLegDeg: 0.04 },
-  // 3 WARNING boats (5-12 km from IMBL)
-  { zone: 'WARNING', minLat: 8.6, maxLat: 10.2, minLon: 79.39, maxLon: 79.45, maxLegDeg: 0.05 },
-  { zone: 'WARNING', minLat: 8.6, maxLat: 10.2, minLon: 79.39, maxLon: 79.45, maxLegDeg: 0.06 },
-  { zone: 'WARNING', minLat: 8.6, maxLat: 10.2, minLon: 79.39, maxLon: 79.45, maxLegDeg: 0.04 },
-  // 3 DANGER boats (0-5 km from IMBL)
-  { zone: 'DANGER',  minLat: 8.6, maxLat: 10.2, minLon: 79.45, maxLon: 79.49, maxLegDeg: 0.04 },
-  { zone: 'DANGER',  minLat: 8.6, maxLat: 10.2, minLon: 79.45, maxLon: 79.49, maxLegDeg: 0.05 },
-  { zone: 'DANGER',  minLat: 8.6, maxLat: 10.2, minLon: 79.45, maxLon: 79.49, maxLegDeg: 0.03 },
-  // 1 SAFE boat (further west, near the coast but still in the sea)
-  { zone: 'SAFE',    minLat: 8.7, maxLat: 10.0, minLon: 79.20, maxLon: 79.30, maxLegDeg: 0.05 },
+const DANGER_ROUTES = [
+  [{lat: 9.8, lon: 79.10}, {lat: 9.3, lon: 79.48}, {lat: 9.8, lon: 79.10}, {lat: 9.8, lon: 79.10}, {lat: 9.8, lon: 79.10}],
+  [{lat: 9.8, lon: 79.10}, {lat: 9.3, lon: 79.48}, {lat: 9.8, lon: 79.10}, {lat: 9.8, lon: 79.10}, {lat: 9.8, lon: 79.10}],
+  [{lat: 9.8, lon: 79.10}, {lat: 9.3, lon: 79.48}, {lat: 9.8, lon: 79.10}, {lat: 9.8, lon: 79.10}, {lat: 9.8, lon: 79.10}]
 ];
 
-const DEMO_FLEET_BOATS = DEMO_FLEET_CORRIDORS.map((corridor, i) => {
-  const rng = seedRng(0xA3C5_0001 + i * 7919);
-  const route = buildRoamRoute(rng, corridor);
-  return {
-    boatId: `DEMO-${String(i + 2).padStart(2, '0')}`,
-    route,
-    // Stagger each boat by a different offset so they don't all hit
-    // the same waypoint at the same tick.
-    phaseOffset: i * Math.floor(route.length / 10),
-    // Each boat moves at a slightly different cadence.
-    speedMs: 220 + (i % 5) * 60,
-    // Pin the boat's zone to its corridor so the narrative stays clean
-    // even if a route step happens to land just outside the band.
-    forceZone: corridor.zone,
-  };
-});
+const ROAM_ROUTES = [
+  [{lat: 8.7, lon: 79.20}, {lat: 8.8, lon: 79.38}, {lat: 8.9, lon: 79.20}, {lat: 8.7, lon: 79.20}],
+  [{lat: 8.9, lon: 79.30}, {lat: 9.0, lon: 79.41}, {lat: 9.1, lon: 79.30}, {lat: 8.9, lon: 79.30}],
+  [{lat: 9.1, lon: 79.20}, {lat: 9.2, lon: 79.38}, {lat: 9.3, lon: 79.20}, {lat: 9.1, lon: 79.20}],
+  [{lat: 9.3, lon: 79.25}, {lat: 9.4, lon: 79.41}, {lat: 9.5, lon: 79.25}, {lat: 9.3, lon: 79.25}],
+  [{lat: 9.6, lon: 79.20}, {lat: 9.7, lon: 79.38}, {lat: 9.8, lon: 79.20}, {lat: 9.6, lon: 79.20}],
+  [{lat: 9.9, lon: 79.30}, {lat: 10.0, lon: 79.41}, {lat: 10.1, lon: 79.30}, {lat: 9.9, lon: 79.30}],
+  [{lat: 10.1, lon: 79.20}, {lat: 10.1, lon: 79.38}, {lat: 10.2, lon: 79.20}, {lat: 10.1, lon: 79.20}]
+];
+
+const ALL_DEMO_ROUTES = [...DANGER_ROUTES, ...ROAM_ROUTES];
 
 // Interpolate many small steps between each waypoint for smooth movement
 function buildDemoRoute(waypoints, stepsPerSegment) {
@@ -503,6 +429,44 @@ function buildDemoRoute(waypoints, stepsPerSegment) {
   }
   return result;
 }
+
+const DEMO_FLEET_BOATS = [];
+
+// 1) The 3 Danger Boats
+// We use 5 segments (Out, Back, Wait, Wait, Wait).
+// 240 steps per segment = 1200 total points.
+// At 250ms speed, 1 step is 0.25s (250 / 250 = 1 tick).
+// 240 steps * 0.25s = exactly 60 seconds.
+// This spaces the boats perfectly 1 minute apart!
+DANGER_ROUTES.forEach((legs, i) => {
+  const route = buildDemoRoute(legs, 240);
+  // Spacing them by 240 points ensures they are 1 segment (60 seconds) apart.
+  // Boat 0 starts at 480 (launches after 720 points = 3 minutes)
+  // Boat 1 starts at 720 (launches after 480 points = 2 minutes)
+  // Boat 2 starts at 960 (launches after 240 points = 1 minute)
+  const phaseOffsets = [480, 720, 960];
+  DEMO_FLEET_BOATS.push({
+    boatId: `DEMO-D${String(i + 1)}`,
+    route,
+    phaseOffset: phaseOffsets[i],
+    speedMs: 250, // Update every tick for smooth movement
+  });
+});
+
+// 2) The 7 Roaming Boats
+ROAM_ROUTES.forEach((legs, i) => {
+  // Original speedMs was 1500 to 3500. 
+  // 1500 / 250 = 6 multiplier. 30 * 6 = 180
+  // 3500 / 250 = 14 multiplier. 30 * 14 = 420
+  const multiplier = (1500 + (i % 5) * 500) / 250;
+  const route = buildDemoRoute(legs, 30 * multiplier);
+  DEMO_FLEET_BOATS.push({
+    boatId: `DEMO-R${String(i + 1)}`,
+    route,
+    phaseOffset: i * Math.floor(route.length / 7),
+    speedMs: 250, // Update every tick for smooth movement
+  });
+});
 
 export default function LeafletMap({
   onLocationUpdate,
@@ -537,6 +501,8 @@ export default function LeafletMap({
   const markerStateRef = useRef(new Map());
   const demoIntervalRef = useRef(null);
   const demoIndexRef = useRef(0);
+  const fleetTicksRef = useRef([]);
+  const fleetIndexRef = useRef(0);
   const followVesselRef = useRef(true);
   const selectedBoatIdRef = useRef(selectedBoatId ?? null);
   const primaryPathBoatIdRef = useRef(selectedBoatId ?? null);
@@ -627,6 +593,7 @@ export default function LeafletMap({
   };
 
   const vesselIcon = (zone, selected, headingDeg) => {
+    const h = (typeof headingDeg === 'number' && !isNaN(headingDeg)) ? headingDeg : 0;
     const ringColor =
       zone === 'DANGER'
         ? '#ff4a4a'
@@ -637,7 +604,7 @@ export default function LeafletMap({
             : '#38bdf8';
     return L.divIcon({
       className: `vessel-marker ${selected ? 'selected' : ''}`,
-      html: `<div style="width: 60px; height: 60px; display: flex; align-items: center; justify-content: center; position: relative; transform: rotate(${headingDeg}deg);"><div class="pulse-ring" style="--pulse-color: ${ringColor};"></div><img src="/icons/boat-1.png" style="width: 32px; height: 32px; position: relative; z-index: 10; filter: drop-shadow(0 0 8px ${ringColor}); transform: rotate(${-headingDeg}deg);"/></div>`,
+      html: `<div style="width: 60px; height: 60px; display: flex; align-items: center; justify-content: center; position: relative; transform: rotate(${h}deg);"><div class="pulse-ring" style="--pulse-color: ${ringColor};"></div><img src="/icons/boat-1.png" style="width: 32px; height: 32px; position: relative; z-index: 10; filter: drop-shadow(0 0 8px ${ringColor}); transform: rotate(${-h}deg);"/></div>`,
       iconSize: [60, 60],
       iconAnchor: [30, 30],
       tooltipAnchor: [0, -35],
@@ -655,7 +622,7 @@ export default function LeafletMap({
   const geofenceZoneToBoatZone = (zone) => {
     if (zone === 'DANGER') return 'DANGER';
     if (zone === 'WARNING') return 'WARNING';
-    if (zone === 'ALERT') return 'ALERT';
+    if (zone === 'ALERT') return demoMode ? 'SAFE' : 'ALERT';
     return 'SAFE';
   };
 
@@ -721,13 +688,13 @@ export default function LeafletMap({
         heading,
       });
     } else if (cached.heading !== heading) {
-      // Just update heading rotation without recreating icon
+      // Fast path: just update CSS transform for heading
       const element = marker.getElement();
       if (element) {
         const innerDiv = element.firstChild;
         if (innerDiv) {
           innerDiv.style.transform = `rotate(${heading}deg)`;
-          // Also update boat image rotation to keep it pointing down
+          // Also update boat image rotation to keep it pointing down (upright)
           const boatImg = innerDiv.querySelector('img');
           if (boatImg) {
             boatImg.style.transform = `rotate(${-heading}deg)`;
@@ -937,7 +904,9 @@ export default function LeafletMap({
       }
     }
 
-    emitBoats();
+    if (!opts?.skipEmit) {
+      emitBoats();
+    }
   };
 
   useEffect(() => {
@@ -1702,7 +1671,25 @@ export default function LeafletMap({
     primaryPathBoatIdRef.current = selectedBoatId;
     const boat = boatDataByIdRef.current.get(selectedBoatId);
     if (!boat) return;
-    pathRef.current = [[boat.lat, boat.lon]];
+    
+    let pastPoints = [[boat.lat, boat.lon]];
+    if (demoMode) {
+      const demoIdx = DEMO_FLEET_BOATS.findIndex(b => b.boatId === selectedBoatId);
+      if (demoIdx !== -1) {
+        const demoBoat = DEMO_FLEET_BOATS[demoIdx];
+        const state = fleetTicksRef.current[demoIdx];
+        if (state && state.idx !== undefined) {
+          pastPoints = [];
+          for (let i = Math.max(0, state.idx - 60); i <= state.idx; i++) {
+            const pt = demoBoat.route[i % demoBoat.route.length];
+            if (pt) pastPoints.push([pt.lat, pt.lon]);
+          }
+          if (pastPoints.length === 0) pastPoints = [[boat.lat, boat.lon]];
+        }
+      }
+    }
+    
+    pathRef.current = pastPoints;
     pathPolylineRef.current?.setLatLngs(pathRef.current);
     updateSelectedBoatState(boat, Date.now());
     refreshMarkerStyles();
@@ -1855,12 +1842,50 @@ export default function LeafletMap({
         clearInterval(demoIntervalRef.current);
         demoIntervalRef.current = null;
       }
+      
+      // Remove demo boats from the fleet map
+      if (boatDataByIdRef.current) {
+        let hasChanges = false;
+        DEMO_FLEET_BOATS.forEach(b => {
+          if (boatDataByIdRef.current.has(b.boatId)) {
+            boatDataByIdRef.current.delete(b.boatId);
+            hasChanges = true;
+            
+            // Remove marker from map
+            const marker = markerByBoatRef.current.get(b.boatId);
+            if (marker && mapInstanceRef.current) {
+              mapInstanceRef.current.removeLayer(marker);
+              markerByBoatRef.current.delete(b.boatId);
+            }
+          }
+        });
+        
+        if (hasChanges) {
+          onBoatsUpdate?.(Array.from(boatDataByIdRef.current.values()));
+        }
+      }
+      
+      // Reset status if socket isn't connected
+      if (!socketRef.current?.connected) {
+        onStatusUpdate?.('System Offline');
+      } else {
+        onStatusUpdate?.('Backend Connected');
+      }
+      
       return;
     }
     // Reset path for fresh demo run
     pathRef.current = [];
     pathPolylineRef.current?.setLatLngs([]);
     demoIndexRef.current = 0;
+
+    // Per-boat cursors for the support fleet. Keep them on refs so the
+    // tick closure stays cheap.
+    fleetIndexRef.current = 0;
+    fleetTicksRef.current = DEMO_FLEET_BOATS.map((b, i) => ({
+      idx: b.phaseOffset % b.route.length,
+      ticksUntilNext: i % 3, // stagger the first tick too
+    }));
 
     // Seed the demo fleet so all boats appear at their starting positions
     // on tick 0 (otherwise the first appearance depends on each boat's
@@ -1880,15 +1905,7 @@ export default function LeafletMap({
     };
     DEMO_FLEET_BOATS.forEach((b, i) => seedBoat(b, b.phaseOffset));
 
-    // Per-boat cursors for the support fleet. Keep them on refs so the
-    // tick closure stays cheap.
-    const fleetIndexRef = { current: 0 };
-    const fleetTicksRef = {
-      current: DEMO_FLEET_BOATS.map((b, i) => ({
-        idx: b.phaseOffset % b.route.length,
-        ticksUntilNext: i % 3, // stagger the first tick too
-      })),
-    };
+
 
     demoIntervalRef.current = setInterval(() => {
       if (!mapInstanceRef.current) return;
@@ -1930,11 +1947,13 @@ export default function LeafletMap({
               lon: routePoint.lon,
               zone,
             },
-            { shouldPan: false }
+            { shouldPan: false, skipEmit: true }
           );
         }
         state.idx = (state.idx + 1) % boat.route.length;
       }
+      
+      emitBoats();
 
       fleetIndexRef.current =
         (fleetIndexRef.current + 1) % DEMO_FLEET_BOATS.length;
