@@ -398,13 +398,7 @@ function validateLocationPayload(body) {
     return { ok: false, error: 'lon must be a finite number between -180 and 180' }
   }
 
-  let distanceN = null
-  if (distance !== undefined && distance !== null) {
-    distanceN = toFiniteNumber(distance)
-    if (!Number.isFinite(distanceN) || distanceN < 0 || distanceN > 1000000) {
-      return { ok: false, error: 'distance must be a non-negative finite number (max 1000000)' }
-    }
-  }
+  let distanceN = distance !== undefined ? toFiniteNumber(distance) : null
 
   if (zone !== undefined && zone !== null && !ALLOWED_ZONES.includes(zone)) {
     return {
