@@ -403,7 +403,10 @@ function validateLocationPayload(body) {
   }
 
   let distanceN = distance !== undefined ? toFiniteNumber(distance) : null
-// Normalize legacy zone aliases from receiver      if (zone === "WARN") zone = "WARNING";      else if (zone === "DANG") zone = "DANGER";      else if (zone === "NOFIX") zone = "NO_FIX";
+// Normalize legacy zone aliases from receiver
+if (zone === "WARN") zone = "WARNING";
+else if (zone === "DANG") zone = "DANGER";
+else if (zone === "NOFIX") zone = "NO_FIX";
 
   if (zone !== undefined && zone !== null && !ALLOWED_ZONES.includes(zone)) {
     return {
