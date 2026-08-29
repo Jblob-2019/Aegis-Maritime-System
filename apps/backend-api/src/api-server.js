@@ -384,7 +384,10 @@ function validateLocationPayload(body) {
   if (!body || typeof body !== 'object') {
     return { ok: false, error: 'Body must be a JSON object' }
   }
-  const { boatId, lat, lon, distance, zone } = body
+  let { boatId, lat, lon, lng, distance, zone } = body
+  if (lon === undefined && lng !== undefined) {
+    lon = lng
+  }
 
   if (typeof boatId !== 'string' || boatId.trim() === '' || boatId.length > 64) {
     return { ok: false, error: 'boatId must be a non-empty string (max 64 chars)' }
@@ -400,6 +403,7 @@ function validateLocationPayload(body) {
   }
 
   let distanceN = distance !== undefined ? toFiniteNumber(distance) : null
+// Normalize legacy zone aliases from receiver      if (zone === "WARN") zone = "WARNING";      else if (zone === "DANG") zone = "DANGER";      else if (zone === "NOFIX") zone = "NO_FIX";
 
   if (zone !== undefined && zone !== null && !ALLOWED_ZONES.includes(zone)) {
     return {
