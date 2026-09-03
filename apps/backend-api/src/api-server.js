@@ -211,6 +211,14 @@ boatSchema.index({ timestamp: -1 })
 boatSchema.index({ boatId: 1, timestamp: -1 })
 const Boat = mongoose.model('Boat', boatSchema)
 
+const boatRegistrationSchema = new mongoose.Schema({
+  boatId:    { type: String, required: true, unique: true },
+  name:      { type: String, required: true },
+  status:    { type: String, default: 'active' },
+  updatedAt: { type: Date, default: Date.now },
+})
+const BoatRegistration = mongoose.model('BoatRegistration', boatRegistrationSchema)
+
 const alertSchema = new mongoose.Schema({
   boatId:    { type: String, required: true },
   zone:      { type: String },
@@ -451,6 +459,13 @@ app.post('/api/location', async (req, res) => {
   const { boatId, lat, lon, distance, zone } = validation.data
 
   try {
+    // Identity Validation: Ensure the boat is registered in the system
+    const registeredBoat = await BoatRegistration.findOne({ boatId })
+    if (!registeredBoat) {
+      console.warn(`[UNREGISTERED] Rejected ping from ${boatId}`)
+      return res.status(403).json({ error: `Boat ${boatId} is not registered in the system` })
+    }
+
     const newData = new Boat({
       boatId,
       lat,
