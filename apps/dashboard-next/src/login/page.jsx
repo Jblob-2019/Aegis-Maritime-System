@@ -41,10 +41,10 @@ export default function LoginPage() {
       localStorage.setItem('role', role);
 
       if (role === 'admin') {
-        navigate('/dashboard');
+        window.location.href = '/dashboard';
       } else if (role === 'fisherman') {
         localStorage.setItem('boatId', boatId);
-        navigate('/my-boat');
+        window.location.href = '/my-boat';
       }
     } catch (err) {
       if (axios.isAxiosError(err) && err.response) {
