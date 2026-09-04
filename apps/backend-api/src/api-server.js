@@ -444,17 +444,20 @@ else if (zone === "NOFIX") zone = "NO_FIX";
  * @param {Response} res
  */
 app.post('/api/location', async (req, res) => {
-  // Authentication disabled for testing:
-  // const hardwareKey = req.headers['x-aegis-key'] || ''
-  //
-  // const providedBuffer = Buffer.alloc(64)
-  // const expectedBuffer = Buffer.alloc(64)
-  // providedBuffer.write(hardwareKey.substring(0, 64))
-  // expectedBuffer.write(SAFE_HARDWARE_API_KEY.substring(0, 64))
-  //
-  // if (!crypto.timingSafeEqual(providedBuffer, expectedBuffer)) {
-  //   return res.status(401).json({ error: 'Unauthorized hardware access' })
-  // }
+  // HMAC Verification for "Modern Cloud" Path (Recommended for Pitch)
+  const signature = req.headers['x-aegis-signature'] || ''
+  const hmacKey = process.env.HMAC_KEY || 'aegis-hardware-secret-2026'
+
+  const computedSignature = crypto
+    .createHmac('sha256', hmacKey)
+    .update(JSON.stringify(req.body))
+    .digest('hex')
+
+  if (signature !== computedSignature) {
+    // For the pitch, we can log this but maybe allow it in dev?
+    // No, let's make it secure.
+    return res.status(401).json({ error: 'Invalid HMAC signature' })
+  }
 
   const validation = validateLocationPayload(req.body)
   if (!validation.ok) {
