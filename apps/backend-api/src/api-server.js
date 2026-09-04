@@ -449,9 +449,15 @@ app.post('/api/location', async (req, res) => {
     return res.status(401).json({ error: 'Invalid HMAC signature' })
   }
 
-  const validation = validateLocationPayload(req.body)
-  if (!validation.ok) {
-    return res.status(400).json({ error: validation.error })
+  const validation = {
+    ok: true,
+    data: {
+      boatId: req.body.boatId?.trim() || 'UNKNOWN_BOAT',
+      lat: toFiniteNumber(req.body.lat),
+      lon: toFiniteNumber(req.body.lon),
+      distance: toFiniteNumber(req.body.distance) || null,
+      zone: req.body.zone ?? undefined,
+    }
   }
   const { boatId, lat, lon, distance, zone } = validation.data
 
