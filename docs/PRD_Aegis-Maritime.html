@@ -1,0 +1,118 @@
+<title>Aegis Maritime Product Requirements Document</title>
+<h1>Aegis Maritime System – Product Requirements Document (PRD)</h1>
+
+<h2>1. Vision & Purpose</h2>
+<p>Enable maritime operators to monitor, command, and respond to vessel movements in real‑time, improving safety, situational awareness, and operational efficiency across commercial, military, and research fleets.</p>
+
+<h2>2. Target Market & Stakeholders</h2>
+<ul>
+  <li>Commercial shipping companies (fleet managers, logisticians).</li>
+  <li>Naval and coast‑guard agencies (tactical commanders, surveillance units).</li>
+  <li>Research institutions tracking marine wildlife.</li>
+  <li>Maritime IoT device vendors (partner integration).</li>
+</ul>
+
+<h2>3. Personas</h2>
+<ul>
+  <li><strong>Operator</strong> – Uses the dashboard to view vessel tracks, issue commands, and respond to alerts.</li>
+  <li><strong>Administrator</strong> – Configures system settings, manages users, and oversees deployments.</li>
+  <li><strong>Field Engineer</strong> – Programs ESP32 devices, validates LoRa connectivity, and collects sensor data.</li>
+</ul>
+
+<h2>4. Success Metrics</h2>
+<ul>
+  <li>95 % of telemetry points displayed within 250 ms latency.</li>
+  <li>99.9 % system uptime per quarter.</li>
+  <li>Reduction of vessel‑incident response time by ≥ 30 % compared to legacy AIS dashboards.
+  </li>
+  <li>Adoption: ≥ 5 major maritime organisations within the first year of release.</li>
+</ul>
+
+<h2>5. High‑Level Features (MoSCoW)</h2>
+<strong>Must have</strong>
+<ul>
+  <li>Real‑time vessel telemetry ingestion (10 Hz per vessel).</li>
+  <li>Web‑based dashboard with map visualisation, vessel list, and details pane.</li>
+  <li>Command & control UI (send navigation commands to vessels).</li>
+  <li>Alert engine (geofence breaches, low battery, collision risk).</li>
+  <li>User authentication & role‑based access control.</li>
+</ul>
+
+<strong>Should have</strong>
+<ul>
+  <li>Historical playback of tracks with CSV export.
+  </li>
+  <li>Multi‑language UI (English + two regional languages).
+  </li>
+  <li>Integration with external AIS providers (optional data overlay).
+  </li>
+</ul>
+
+<strong>Could have</strong>
+<ul>
+  <li>Predictive analytics (machine‑learning‑based ETA predictions).
+  </li>
+  <li>Mobile‑native companion app (React Native).
+  </li>
+  <li>Voice command integration for tactical HUD.
+  </li>
+</ul>
+
+<h2>6. User Stories (selected)</h2>
+<pre>
+1. As an Operator, I want to see all vessels on a map so that I can monitor their positions at a glance.
+2. As an Operator, I need to filter vessels by type, status, or region to focus on relevant assets.
+3. As an Operator, I want to click a vessel and view its recent track, speed, and heading.
+4. As an Operator, I can send a navigation command (e.g., change course) to a vessel and receive acknowledgment.
+5. As an Operator, I receive a visual and audible alert when a vessel exits a protected area.
+6. As an Administrator, I can create, edit, and revoke user accounts with specific roles.
+7. As a Field Engineer, I can upload new firmware to an ESP32 device via the OTA endpoint.
+8. As a Field Engineer, I can view realtime telemetry logs from the LoRa gateway for debugging.
+9. As a Researcher, I can export a vessel’s track data for the last 24 h as CSV for analysis.
+10. As a Administrator, I can view system health dashboards (CPU, memory, DB latency) and trigger a container restart.
+</pre>
+
+<h2>7. Acceptance Criteria (example for #1)</h2>
+<ul>
+  <li>Map loads within 2 seconds on a standard broadband connection.</li>
+  <li>All active vessels (≤ 5 000) are displayed as icons without overlap.
+      • Icons colour‑coded by vessel type.
+  </li>
+  <li>Hovering over an icon shows a tooltip with vessel name, speed, and heading.
+  </li>
+</ul>
+
+<h2>8. Competitive Landscape</h2>
+<ul>
+  <li>Existing AIS dashboards (MarineTraffic, VesselFinder) – mostly passive, limited command capability.
+  <li>Naval tactical systems – proprietary, high cost, limited to government.
+  <li>Open‑source vessel‑tracking projects (OpenCPN) – lack LoRa integration and real‑time command.
+</ul>
+
+<h2>9. Assumptions & Dependencies</h2>
+<ul>
+  <li>LoRa network coverage is available for all target vessels.
+  <li>PostgreSQL 15 and Redis 7 are used in production.
+  <li>Docker Engine 20+ and Kubernetes 1.28 are available for deployment.
+  <li>Third‑party GIS datasets are licensed for commercial use.
+</ul>
+
+<h2>10. Constraints</h2>
+<ul>
+  <li>Regulatory: Must not store raw AIS data longer than required by local maritime law.
+  <li>Hardware: ESP32 firmware must stay under 256 KB flash.
+  <li>Budget: Initial MVP must be deliverable within $250 k development budget.
+</ul>
+
+<h2>11. Timeline (MVP)</h2>
+<ul>
+  <li>Sprint 1 (2 weeks): Set up project scaffolding, CI/CD pipeline, Docker environment.
+  <li>Sprint 2 (2 weeks): Backend telemetry ingestion API + PostgreSQL schema.
+  <li>Sprint 3 (2 weeks): Dashboard map UI showing static vessel data.
+  <li>Sprint 4 (2 weeks): Real‑time WebSocket integration, basic command endpoint.
+  <li>Sprint 5 (2 weeks): Alert engine and role‑based auth.
+  <li>Sprint 6 (2 weeks): Firmware OTA update flow, testing, documentation.
+  <li>MVP Release (Week 12): Full functional prototype ready for pilot deployment.
+</ul>
+
+<p>Prepared on 2026‑09‑04.</p>

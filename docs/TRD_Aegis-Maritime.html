@@ -1,0 +1,142 @@
+<title>Aegis Maritime Technical Requirements Document</title>
+<h1>Aegis Maritime System – Technical Requirements Document (TRD)</h1>
+
+<h2>1. Introduction</h2>
+<p>The Aegis Maritime System is a monorepo that provides real‑time vessel tracking, tactical HUD integration, and LoRa‑based satellite communication for maritime operations. It combines a Node.js backend API, a Next.js dashboard, and ESP32 firmware for on‑board sensors. This document captures the technical requirements necessary to design, develop, and operate the system at production scale.</p>
+
+<h2>2. Scope</h2>
+<ul>
+  <li>Backend API (Node.js/Express) – ingestion, storage, and analytics.</li>
+  <li>Frontend dashboard (Next.js) – visualisation, command & control, tactical HUD.</li>
+  <li>Firmware (ESP32/LoRa) – telemetry collection, bi‑directional command.</li>
+  <li>CI/CD pipeline – Docker, Watchtower, self‑hosted GitHub Actions.</li>
+</ul>
+<p>Out of scope: hardware design of vessels, external third‑party GIS services beyond provided GeoJSON files.</p>
+
+<h2>3. System Overview</h2>
+<p>The system follows a three‑tier architecture:</p>
+<pre class="mermaid">
+flowchart LR
+    subgraph Firmware[ESP32 Firmware]
+        F1[Telemetry Sensors] --> F2[LoRa Transmitter]
+        F2 -->|UDP over LoRa| B1[LoRa Gateway]
+    end
+    subgraph Backend[Backend API]
+        B1 --> B2[Node.js Server]
+        B2 --> B3[PostgreSQL DB]
+        B2 --> B4[Redis Cache]
+    end
+    subgraph Frontend[Dashboard]
+        D1[Next.js App] --> D2[REST/WS API]
+        D2 --> B2
+    end
+    Firmware --> Backend
+    Backend --> Frontend
+</pre>
+<p>The diagram above illustrates data flow from sensors to the dashboard.</p>
+
+<h2>4. Functional Requirements</h2>
+<ol>
+  <li><strong>Vessel Telemetry Ingestion</strong> – Receive JSON payloads (lat, lon, speed, heading, status) over UDP/LoRa at up to 10 Hz per vessel.</li>
+  <li><strong>Data Persistence</strong> – Store raw telemetry and derived tracks in PostgreSQL; keep 30‑day retention.</li>
+  <li><strong>Real‑time Broadcast</strong> – Push updates via WebSocket to dashboard clients with < 250 ms latency.</li>
+  <li><strong>Tactical HUD Integration</strong> – Expose `/api/cmd` endpoint for issuing navigation commands to vessels; secure with JWT.</li>
+  <li><strong>Historical Queries</strong> – Provide `/api/fleet` with time‑range filters; support CSV export.</li>
+  <li><strong>Alerting</strong> – Detect out‑of‑bounds, low‑battery, or collision risks; push alerts to Dashboard and optional email/SMS.</li>
+  <li><strong>Admin UI</strong> – Role‑based access (admin, operator, viewer) for configuration and log review.</li>
+  <li><strong>Internationalisation</strong> – UI supports EN and local maritime languages; dates in ISO 8601.</li>
+</ol>
+
+<h2>5. Non‑Functional Requirements</h2>
+<ul>
+  <li><strong>Performance</strong> – System must handle 5 000 concurrent vessels, 50 000 WebSocket subscribers, and sustain 1 000 API requests/s.</li>
+  <li><strong>Scalability</strong> – Horizontal scaling via Docker Swarm/Kubernetes; stateless API servers behind an L7 load‑balancer.</li>
+  <li><strong>Reliability</strong> – 99.9 % uptime SLA; automatic container restart; data replication with PostgreSQL streaming and Redis Sentinel.</li>
+  <li><strong>Security</strong> – TLS 1.3 for all HTTP/WS traffic; JWT (RS256) for auth; rate‑limit 100 req/min per IP; input validation on all endpoints.</li>
+  <li><strong>Observability</strong> – Export Prometheus metrics; centralised logging with Loki/Grafana.</li>
+  <li><strong>Maintainability</strong> – Code coverage ≥ 80 %; CI linting, type‑checking (TypeScript), automated tests.</li>
+  <li><strong>Compliance</strong> – GDPR‑compatible data handling; ship‑level anonymisation on public APIs.</li>
+</ul>
+
+<h2>6. Data Model</h2>
+<p>Key tables (simplified):</p>
+<pre>
+CREATE TABLE vessels (
+  id UUID PRIMARY KEY,
+  name TEXT NOT NULL,
+  imo VARCHAR(9) UNIQUE,
+  mmsi VARCHAR(9),
+  vessel_type TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE TABLE telemetry (
+  id BIGSERIAL PRIMARY KEY,
+  vessel_id UUID REFERENCES vessels(id),
+  ts TIMESTAMP WITH TIME ZONE NOT NULL,
+  latitude DOUBLE PRECISION,
+  longitude DOUBLE PRECISION,
+  speed_knots REAL,
+  heading REAL,
+  battery_percent REAL,
+  raw JSONB
+);
+</pre>
+
+<h2>7. API Specification (selected endpoints)</h2>
+<pre>
+GET /api/fleet?from=ISO8601&to=ISO8601&vessel_id=UUID
+POST /api/telemetry   (internal LoRa gateway)
+GET /api/cmd/:vessel_id   (fetch pending commands)
+POST /api/cmd/:vessel_id  (operator sends command)
+GET /api/alerts?severity=high
+</pre>
+
+<h2>8. Security Architecture</h2>
+<ul>
+  <li>Network segmentation: firmware ↔ LoRa gateway ↔ DMZ ↔ API.
+  <li>Secret management: Docker secrets for DB credentials, JWT private key.
+  <li>Audit logging: immutable logs stored in separate S3 bucket.
+  <li>Pen‑testing scope defined in separate security‑review document.</li>
+</ul>
+
+<h2>9. Performance & Scalability</h2>
+<ul>
+  <li>Benchmark target: 1 ms average DB insert per telemetry point.
+  <li>Cache latest vessel state in Redis (TTL 5 s) to minimise DB reads.
+  <li>Horizontal auto‑scaling trigger on CPU > 70 % for API containers.
+</ul>
+
+<h2>10. Deployment & DevOps</h2>
+<ul>
+  <li>Docker‑compose for local dev (backend, db, redis, dashboard).
+  <li>K8s manifests for prod (namespace a‑maritime, rolling updates).
+  <li>GitHub Actions workflow: lint → test → build → push Docker image → deploy via Helm.
+  <li>Watchtower updates containers automatically on new image tag.
+</ul>
+
+<h2>11. Testing Strategy</h2>
+<ul>
+  <li>Unit tests (Jest) for backend services – 80 % coverage.
+  <li>Integration tests (Supertest) against API.
+  <li>E2E tests (Playwright) for dashboard UI.
+  <li>Hardware‑in‑the‑loop simulation for firmware (Arduino CLI).
+  <li>Load testing with k6 – simulate 5 k vessels and 10 k WS clients.
+</ul>
+
+<h2>12. Risks & Mitigations</h2>
+<table>
+<tr><th>Risk</th><th>Impact</th><th>Mitigation</th></tr>
+<tr><td>LoRa packet loss > 5 %</td><td>Data gaps, stale state</td><td>Implement forward error correction; buffer retransmission on gateway.</td></tr>
+<tr><td>JWT key compromise</td><td>Unauthorised command injection</td><td>Rotate keys weekly; store in HSM.</td></tr>
+<tr><td>Regulatory changes (AIS data)</td><td>Compliance violations</td><td>Modular data‑ingestion layer; monitor regulations.</td></tr>
+</table>
+
+<h2>13. Glossary</h2>
+<ul>
+  <li><strong>LoRa</strong> – Low‑Power Wide‑Area network protocol used by ESP32 modules.</li>
+  <li><strong>HUD</strong> – Head‑up display used by tactical operators.</li>
+  <li><strong>WS</strong> – WebSocket.</li>
+</ul>
+
+<p>Prepared on 2026‑09‑04.</p>

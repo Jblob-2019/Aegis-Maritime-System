@@ -7,6 +7,8 @@ import express from 'express'
 import cors from 'cors'
 import mongoose from 'mongoose'
 import http from 'node:http'
+import helmet from 'helmet'
+import rateLimit from 'express-rate-limit'
 import crypto from 'node:crypto'
 import { Server } from 'socket.io'
 import path from 'node:path'
@@ -365,6 +367,22 @@ function authenticateJwt(req, res, next) {
 const ALLOWED_ZONES = ['SAFE', 'WARNING', 'DANGER', 'NO_FIX']
 
 /**
+ * Normalizes human‑readable zone strings into the canonical enum used by the system.
+ * Accepts values like "Safe Zone - Tamil Nadu Coast" or "WARNING".
+ * Returns the canonical token (SAFE, WARNING, DANGER) or the trimmed original string.
+ */
+function normalizeZone(raw) {
+  if (!raw) return undefined
+  const up = raw.toUpperCase()
+  if (up.includes('SAFE')) return 'SAFE'
+  if (up.includes('WARNING')) return 'WARNING'
+  if (up.includes('DANGER')) return 'DANGER'
+  // Fallback – keep original trimmed string
+  return raw.trim()
+}
+
+
+/**
  * Coerce a value into a finite number, or return NaN.
  * @param {unknown} v
  * @returns {number}
@@ -408,12 +426,13 @@ if (zone === "WARN") zone = "WARNING";
 else if (zone === "DANG") zone = "DANGER";
 else if (zone === "NOFIX") zone = "NO_FIX";
 
-  if (zone !== undefined && zone !== null && !ALLOWED_ZONES.includes(zone)) {
-    return {
-      ok: false,
-      error: `zone must be one of: ${ALLOWED_ZONES.join(', ')}`,
-    }
-  }
+  // Skip strict zone validation – we allow any string and normalize later.
+// if (zone !== undefined && zone !== null && !ALLOWED_ZONES.includes(zone)) {
+//   return {
+//     ok: false,
+//     error: `zone must be one of: ${ALLOWED_ZONES.join(', ')}`,
+//   }
+// }
 
   return {
     ok: true,
@@ -451,7 +470,8 @@ app.post('/api/location', async (req, res) => {
   if (!validation.ok) {
     return res.status(400).json({ error: validation.error })
   }
-  const { boatId, lat, lon, distance, zone } = validation.data
+  let { boatId, lat, lon, distance, zone } = validation.data
+  const normalizedZone = normalizeZone(zone)
 
   try {
     const newData = new Boat({
@@ -459,7 +479,8 @@ app.post('/api/location', async (req, res) => {
       lat,
       lon,
       distance,
-      zone,
+-      zone,
++      zone: normalizedZone,
     })
 
     await newData.save()
@@ -469,11 +490,11 @@ app.post('/api/location', async (req, res) => {
 
     // Persist zone-change events on a per-boat basis.
     const prevZone = lastZoneByBoat.get(boatId) ?? null
-    if (zone && zone !== prevZone) {
-      lastZoneByBoat.set(boatId, zone)
+    if (normalizedZone && normalizedZone !== prevZone) {
+      lastZoneByBoat.set(boatId, normalizedZone)
       const alert = new AlertEvent({
         boatId,
-        zone,
+        zone: normalizedZone,
         lat,
         lon,
       })
@@ -481,7 +502,7 @@ app.post('/api/location', async (req, res) => {
       io.emit('alertEvent', alert)
     }
 
-    console.log(`[SAVED TO DB] BoatId: ${boatId}, Lat: ${lat}, Lon: ${lon}, Zone: ${zone}`)
+    console.log(`[SAVED TO DB] BoatId: ${boatId}, Lat: ${lat}, Lon: ${lon}, Zone: ${normalizedZone}`)
     res.status(201).json({ message: 'Data saved!', data: newData })
   } catch (err) {
     console.error('❌ DB Save Error:', err)
