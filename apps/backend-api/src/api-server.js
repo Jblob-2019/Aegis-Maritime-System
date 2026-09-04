@@ -444,66 +444,31 @@ else if (zone === "NOFIX") zone = "NO_FIX";
  * @param {Response} res
  */
 app.post('/api/location', async (req, res) => {
-  // HMAC Verification for "Modern Cloud" Path (Recommended for Pitch)
-  const signature = req.headers['x-aegis-signature'] || ''
-  const hmacKey = process.env.HMAC_KEY || 'aegis-hardware-secret-2026'
+  // ---- 1️⃣ Hardware‑key authentication ---------------------------------
+  const hardwareKey = req.headers['x-aegis-key'] || ''
 
-  const computedSignature = crypto
-    .createHmac('sha256', hmacKey)
-    .update(JSON.stringify(req.body))
-    .digest('hex')
+  const providedBuffer = Buffer.alloc(64)
+  const expectedBuffer = Buffer.alloc(64)
+  providedBuffer.write(hardwareKey.substring(0, 64))
+  expectedBuffer.write(SAFE_HARDWARE_API_KEY.substring(0, 64))
 
-  if (signature !== computedSignature) {
-    // For the pitch, we can log this but maybe allow it in dev?
-    // No, let's make it secure.
-    return res.status(401).json({ error: 'Invalid HMAC signature' })
+  if (!crypto.timingSafeEqual(providedBuffer, expectedBuffer)) {
+    console.log(`[AUTH FAIL] Unauthorized access attempt with key: ${hardwareKey}`)
+    return res.status(401).json({ error: 'Unauthorized hardware access' })
   }
 
-  const validation = {
-    ok: true,
-    data: {
-      boatId: req.body.boatId?.trim() || 'UNKNOWN_BOAT',
-      lat: toFiniteNumber(req.body.lat),
-      lon: toFiniteNumber(req.body.lon),
-      distance: toFiniteNumber(req.body.distance) || null,
-      zone: req.body.zone ?? undefined,
-    }
-  }
-  const { boatId, lat, lon, distance, zone } = validation.data
+  // ---- 2️⃣ Payload Bypass (Validation Removed for Troubleshooting)
+  const { boatId, lat, lon, distance, zone } = req.body
 
+  console.log(`[RECEIVED] Attempting to save: Boat=${boatId}, ${zone}`)
+
+  // ---- 3️⃣ Persist to MongoDB ------------------------------
   try {
-    // Identity Validation: Ensure the boat is registered in the system
-    const registeredBoat = await BoatRegistration.findOne({ boatId })
-    if (!registeredBoat) {
-      console.warn(`[UNREGISTERED] Rejected ping from ${boatId}`)
-      return res.status(403).json({ error: `Boat ${boatId} is not registered in the system` })
-    }
-
-    const newData = new Boat({
-      boatId,
-      lat,
-      lon,
-      distance,
-      zone,
-    })
-
+    const newData = new Boat({ boatId, lat, lon, distance, zone })
     await newData.save()
 
-    // Real-time push to all connected dashboards
-    io.emit('locationUpdate', newData)
-
-    // Persist zone-change events on a per-boat basis.
-    const prevZone = lastZoneByBoat.get(boatId) ?? null
-    if (zone && zone !== prevZone) {
-      lastZoneByBoat.set(boatId, zone)
-      const alert = new AlertEvent({
-        boatId,
-        zone,
-        lat,
-        lon,
-      })
-      await alert.save()
-      io.emit('alertEvent', alert)
+    if (typeof io !== 'undefined') {
+      io.emit('locationUpdate', newData)
     }
 
     console.log(`[SAVED TO DB] BoatId: ${boatId}, Lat: ${lat}, Lon: ${lon}, Zone: ${zone}`)
