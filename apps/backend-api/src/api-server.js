@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url'
 import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
 import os from 'node:os'
+import fs from 'node:fs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -210,6 +211,14 @@ boatSchema.index({ timestamp: -1 })
 boatSchema.index({ boatId: 1, timestamp: -1 })
 const Boat = mongoose.model('Boat', boatSchema)
 
+const boatRegistrationSchema = new mongoose.Schema({
+  boatId:    { type: String, required: true, unique: true },
+  name:      { type: String, required: true },
+  status:    { type: String, default: 'active' },
+  updatedAt: { type: Date, default: Date.now },
+})
+const BoatRegistration = mongoose.model('BoatRegistration', boatRegistrationSchema)
+
 const alertSchema = new mongoose.Schema({
   boatId:    { type: String, required: true },
   zone:      { type: String },
@@ -383,7 +392,10 @@ function validateLocationPayload(body) {
   if (!body || typeof body !== 'object') {
     return { ok: false, error: 'Body must be a JSON object' }
   }
-  const { boatId, lat, lon, distance, zone } = body
+  let { boatId, lat, lon, lng, distance, zone } = body
+  if (lon === undefined && lng !== undefined) {
+    lon = lng
+  }
 
   if (typeof boatId !== 'string' || boatId.trim() === '' || boatId.length > 64) {
     return { ok: false, error: 'boatId must be a non-empty string (max 64 chars)' }
@@ -398,13 +410,11 @@ function validateLocationPayload(body) {
     return { ok: false, error: 'lon must be a finite number between -180 and 180' }
   }
 
-  let distanceN = null
-  if (distance !== undefined && distance !== null) {
-    distanceN = toFiniteNumber(distance)
-    if (!Number.isFinite(distanceN) || distanceN < 0 || distanceN > 10000) {
-      return { ok: false, error: 'distance must be a non-negative finite number' }
-    }
-  }
+  let distanceN = distance !== undefined ? toFiniteNumber(distance) : null
+// Normalize legacy zone aliases from receiver
+if (zone === "WARN") zone = "WARNING";
+else if (zone === "DANG") zone = "DANGER";
+else if (zone === "NOFIX") zone = "NO_FIX";
 
   if (zone !== undefined && zone !== null && !ALLOWED_ZONES.includes(zone)) {
     return {
@@ -615,7 +625,12 @@ app.use((req, res, next) => {
   if (req.path.startsWith('/api')) {
     return next()
   }
-  res.sendFile(path.join(frontendBuildPath, 'index.html'))
+  const indexPath = path.join(frontendBuildPath, 'index.html')
+  if (fs.existsSync(indexPath)) {
+    res.sendFile(indexPath)
+  } else {
+    res.send('Aegis Backend is running! (Frontend build not found)')
+  }
 })
 
 // ---------------------------------------------------------------------------

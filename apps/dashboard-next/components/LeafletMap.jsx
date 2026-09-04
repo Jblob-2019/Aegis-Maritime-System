@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { WindParticleLayer, GradientFieldLayer, windSample, tempSample, humSample, pressSample, tempStops, humidityStops, pressureStops, windStops, weatherGrid } from './weatherLayers';
+import { WindParticleLayer, GradientFieldLayer, windSample, tempSample, humSample, cloudsSample, cloudStops, rainSample, pressSample, tempStops, humidityStops, pressureStops, stormStops, windStops, weatherGrid } from './weatherLayers';
 import { io, Socket } from 'socket.io-client';
 import * as turf from '@turf/turf';
 
@@ -392,21 +392,26 @@ function getMidpointLatLngFromFeature(feature) {
   return null;
 }
 
-// ─── Demo Mode Route (SAFE near coast → WARNING → DANGER farther offshore → back) ──
-const DEMO_WAYPOINTS = [
-  { lat: 9.8, lon: 79.1 },
-  { lat: 9.7, lon: 79.15 },
-  { lat: 9.6, lon: 79.22 },
-  { lat: 9.5, lon: 79.32 },
-  { lat: 9.4, lon: 79.4 },
-  { lat: 9.3, lon: 79.48 },
-  { lat: 9.22, lon: 79.53 },
-  { lat: 9.3, lon: 79.48 }, // Turning back
-  { lat: 9.4, lon: 79.4 }, // WARNING again
-  { lat: 9.5, lon: 79.32 },
-  { lat: 9.6, lon: 79.22 }, // Back to SAFE
-  { lat: 9.7, lon: 79.15 },
+// ─── Demo Mode Fleet ─────────────────────────────────────────────────────
+// 10 support boats: 3 moving to DANGER, 7 roaming between SAFE and WARNING.
+
+const DANGER_ROUTES = [
+  [{lat: 9.8, lon: 79.10}, {lat: 9.3, lon: 79.48}, {lat: 9.8, lon: 79.10}, {lat: 9.8, lon: 79.10}, {lat: 9.8, lon: 79.10}],
+  [{lat: 9.8, lon: 79.10}, {lat: 9.3, lon: 79.48}, {lat: 9.8, lon: 79.10}, {lat: 9.8, lon: 79.10}, {lat: 9.8, lon: 79.10}],
+  [{lat: 9.8, lon: 79.10}, {lat: 9.3, lon: 79.48}, {lat: 9.8, lon: 79.10}, {lat: 9.8, lon: 79.10}, {lat: 9.8, lon: 79.10}]
 ];
+
+const ROAM_ROUTES = [
+  [{lat: 8.7, lon: 79.20}, {lat: 8.8, lon: 79.38}, {lat: 8.9, lon: 79.20}, {lat: 8.7, lon: 79.20}],
+  [{lat: 8.9, lon: 79.30}, {lat: 9.0, lon: 79.41}, {lat: 9.1, lon: 79.30}, {lat: 8.9, lon: 79.30}],
+  [{lat: 9.1, lon: 79.20}, {lat: 9.2, lon: 79.38}, {lat: 9.3, lon: 79.20}, {lat: 9.1, lon: 79.20}],
+  [{lat: 9.3, lon: 79.25}, {lat: 9.4, lon: 79.41}, {lat: 9.5, lon: 79.25}, {lat: 9.3, lon: 79.25}],
+  [{lat: 9.6, lon: 79.20}, {lat: 9.7, lon: 79.38}, {lat: 9.8, lon: 79.20}, {lat: 9.6, lon: 79.20}],
+  [{lat: 9.9, lon: 79.30}, {lat: 10.0, lon: 79.41}, {lat: 10.1, lon: 79.30}, {lat: 9.9, lon: 79.30}],
+  [{lat: 10.1, lon: 79.20}, {lat: 10.1, lon: 79.38}, {lat: 10.2, lon: 79.20}, {lat: 10.1, lon: 79.20}]
+];
+
+const ALL_DEMO_ROUTES = [...DANGER_ROUTES, ...ROAM_ROUTES];
 
 // Interpolate many small steps between each waypoint for smooth movement
 function buildDemoRoute(waypoints, stepsPerSegment) {
@@ -425,7 +430,43 @@ function buildDemoRoute(waypoints, stepsPerSegment) {
   return result;
 }
 
-const DEMO_ROUTE = buildDemoRoute(DEMO_WAYPOINTS, 40);
+const DEMO_FLEET_BOATS = [];
+
+// 1) The 3 Danger Boats
+// We use 5 segments (Out, Back, Wait, Wait, Wait).
+// 240 steps per segment = 1200 total points.
+// At 250ms speed, 1 step is 0.25s (250 / 250 = 1 tick).
+// 240 steps * 0.25s = exactly 60 seconds.
+// This spaces the boats perfectly 1 minute apart!
+DANGER_ROUTES.forEach((legs, i) => {
+  const route = buildDemoRoute(legs, 240);
+  // Spacing them by 240 points ensures they are 1 segment (60 seconds) apart.
+  // Boat 0 starts at 480 (launches after 720 points = 3 minutes)
+  // Boat 1 starts at 720 (launches after 480 points = 2 minutes)
+  // Boat 2 starts at 960 (launches after 240 points = 1 minute)
+  const phaseOffsets = [480, 720, 960];
+  DEMO_FLEET_BOATS.push({
+    boatId: `DEMO-D${String(i + 1)}`,
+    route,
+    phaseOffset: phaseOffsets[i],
+    speedMs: 250, // Update every tick for smooth movement
+  });
+});
+
+// 2) The 7 Roaming Boats
+ROAM_ROUTES.forEach((legs, i) => {
+  // Original speedMs was 1500 to 3500. 
+  // 1500 / 250 = 6 multiplier. 30 * 6 = 180
+  // 3500 / 250 = 14 multiplier. 30 * 14 = 420
+  const multiplier = (1500 + (i % 5) * 500) / 250;
+  const route = buildDemoRoute(legs, 30 * multiplier);
+  DEMO_FLEET_BOATS.push({
+    boatId: `DEMO-R${String(i + 1)}`,
+    route,
+    phaseOffset: i * Math.floor(route.length / 7),
+    speedMs: 250, // Update every tick for smooth movement
+  });
+});
 
 export default function LeafletMap({
   onLocationUpdate,
@@ -440,6 +481,11 @@ export default function LeafletMap({
   demoMode = false,
   weatherLayer = null,
   realWeather = null,
+  cloudsTileOn = false,
+  // Gate the hover inspector — only true while the user is on the
+  // Weather tab. Defaults to true so it works as a drop-in, but the
+  // dashboard flips it false whenever Weather isn't the active view.
+  enableHoverInspector = true,
 }) {
   const mapRef = useRef(null);
   const mapInstanceRef = useRef(null);
@@ -455,6 +501,8 @@ export default function LeafletMap({
   const markerStateRef = useRef(new Map());
   const demoIntervalRef = useRef(null);
   const demoIndexRef = useRef(0);
+  const fleetTicksRef = useRef([]);
+  const fleetIndexRef = useRef(0);
   const followVesselRef = useRef(true);
   const selectedBoatIdRef = useRef(selectedBoatId ?? null);
   const primaryPathBoatIdRef = useRef(selectedBoatId ?? null);
@@ -467,7 +515,77 @@ export default function LeafletMap({
   });
   const trajectoryPolylineRef = useRef(null);
   const bathymetryLayerRef = useRef(null);
-  const [showBathymetry, setShowBathymetry] = useState(true);
+  const [showBathymetry, setShowBathymetry] = useState(false);
+  // Hover-only EEZ/boundary labels — populated on polyline hover,
+  // cleared when the cursor leaves. Keeps the map calm until the
+  // user actually wants to inspect a zone.
+  const zoneLabelsRef = useRef(new Map());
+
+  // ── Weather hover inspector ────────────────────────────────────────────
+  // Shows a small callout next to the cursor with the live weather value
+  // at that lat/lng for the currently active layer (wind/clouds/…).
+  const [inspector, setInspector] = useState(null); // { x, y, lat, lng, primary, secondary, palette }
+  const lastInspectorMoveRef = useRef(0);
+  // Ref so the map-level mousemove handler always sees the latest
+  // weatherLayer value even though the map-creation effect runs once.
+  const weatherLayerRef = useRef(weatherLayer);
+  useEffect(() => {
+    weatherLayerRef.current = weatherLayer;
+    // When the layer changes, clear any stale callout so the user isn't
+    // seeing leftover text for the previous layer.
+    setInspector(null);
+  }, [weatherLayer]);
+  // Same for the inspector gate (Weather tab is active or not).
+  const inspectorEnabledRef = useRef(enableHoverInspector);
+  useEffect(() => {
+    inspectorEnabledRef.current = enableHoverInspector;
+    // Drop any visible callout the moment we leave the Weather tab so it
+    // doesn't linger into the next view.
+    if (!enableHoverInspector) setInspector(null);
+  }, [enableHoverInspector]);
+
+  // Format a wind speed (m/s) into a Beaufort description + compass heading.
+  const bftDescribe = (mps) => {
+    const kts = mps * 1.94384;
+    const bft = Math.min(12, Math.max(0, Math.round(
+      mps < 0.3 ? 0 :
+      mps < 1.5 ? 1 :
+      mps < 3.3 ? 2 :
+      mps < 5.4 ? 3 :
+      mps < 7.9 ? 4 :
+      mps < 10.7 ? 5 :
+      mps < 13.8 ? 6 :
+      mps < 17.1 ? 7 :
+      mps < 20.7 ? 8 :
+      mps < 24.4 ? 9 :
+      mps < 28.4 ? 10 :
+      mps < 32.6 ? 11 : 12
+    )));
+    const names = [
+      'Calm', 'Light Air', 'Light Breeze', 'Gentle Breeze',
+      'Moderate Breeze', 'Fresh Breeze', 'Strong Breeze', 'Near Gale',
+      'Gale', 'Strong Gale', 'Storm', 'Violent Storm', 'Hurricane Force',
+    ];
+    return { bft, name: names[bft], kts };
+  };
+
+  const compassArrow = (deg) => {
+    if (deg == null || Number.isNaN(deg)) return '↑';
+    const arrows = ['↑','↗','→','↘','↓','↙','←','↖'];
+    return arrows[Math.round(((deg % 360) / 45)) % 8];
+  };
+
+  // Convert a Beaufort number to the 8-bit windStops colour.
+  const windPaletteFor = (bft) => {
+    const stops = [
+      [35,70,170],[35,150,185],[70,185,120],[190,215,80],
+      [230,180,60],[230,120,50],[210,70,50],[150,30,40],
+    ];
+    if (bft <= 1) return stops[0];
+    if (bft <= 4) return stops[2];
+    if (bft <= 6) return stops[4];
+    return stops[6];
+  };
 
   const normalizeZone = (zone) => {
     if (zone === 'SAFE' || zone === 'WARNING' || zone === 'DANGER') return zone;
@@ -475,6 +593,7 @@ export default function LeafletMap({
   };
 
   const vesselIcon = (zone, selected, headingDeg) => {
+    const h = (typeof headingDeg === 'number' && !isNaN(headingDeg)) ? headingDeg : 0;
     const ringColor =
       zone === 'DANGER'
         ? '#ff4a4a'
@@ -485,7 +604,7 @@ export default function LeafletMap({
             : '#38bdf8';
     return L.divIcon({
       className: `vessel-marker ${selected ? 'selected' : ''}`,
-      html: `<div style="width: 60px; height: 60px; display: flex; align-items: center; justify-content: center; position: relative; transform: rotate(${headingDeg}deg);"><div class="pulse-ring" style="--pulse-color: ${ringColor};"></div><img src="/icons/boat-1.png" style="width: 32px; height: 32px; position: relative; z-index: 10; filter: drop-shadow(0 0 8px ${ringColor}); transform: rotate(${-headingDeg}deg);"/></div>`,
+      html: `<div style="width: 60px; height: 60px; display: flex; align-items: center; justify-content: center; position: relative; transform: rotate(${h}deg);"><div class="pulse-ring" style="--pulse-color: ${ringColor};"></div><img src="/icons/boat-1.png" style="width: 32px; height: 32px; position: relative; z-index: 10; filter: drop-shadow(0 0 8px ${ringColor}); transform: rotate(${-h}deg);"/></div>`,
       iconSize: [60, 60],
       iconAnchor: [30, 30],
       tooltipAnchor: [0, -35],
@@ -503,7 +622,7 @@ export default function LeafletMap({
   const geofenceZoneToBoatZone = (zone) => {
     if (zone === 'DANGER') return 'DANGER';
     if (zone === 'WARNING') return 'WARNING';
-    if (zone === 'ALERT') return 'ALERT';
+    if (zone === 'ALERT') return demoMode ? 'SAFE' : 'ALERT';
     return 'SAFE';
   };
 
@@ -569,13 +688,13 @@ export default function LeafletMap({
         heading,
       });
     } else if (cached.heading !== heading) {
-      // Just update heading rotation without recreating icon
+      // Fast path: just update CSS transform for heading
       const element = marker.getElement();
       if (element) {
         const innerDiv = element.firstChild;
         if (innerDiv) {
           innerDiv.style.transform = `rotate(${heading}deg)`;
-          // Also update boat image rotation to keep it pointing down
+          // Also update boat image rotation to keep it pointing down (upright)
           const boatImg = innerDiv.querySelector('img');
           if (boatImg) {
             boatImg.style.transform = `rotate(${-heading}deg)`;
@@ -785,7 +904,9 @@ export default function LeafletMap({
       }
     }
 
-    emitBoats();
+    if (!opts?.skipEmit) {
+      emitBoats();
+    }
   };
 
   useEffect(() => {
@@ -950,6 +1071,12 @@ export default function LeafletMap({
         }
 
         const offsetFeatures = buildImblOffsetFeatures(imblGeoJson);
+
+        // zoneLabelsRef is the per-component Map of currently-shown EEZ
+        // labels. Initialised once in the ref declaration; reused on
+        // every re-render so hover-out can remove its entry.
+        const labelForOffset = zoneLabelsRef.current;
+
         offsetFeatures.forEach((offset) => {
           const offsetLines = getLineStringsFromFeature(offset.feature);
           if (offsetLines.length === 0) {
@@ -960,34 +1087,47 @@ export default function LeafletMap({
             return;
           }
 
-          try {
-            const offsetLayer = safeAddLayer(
-              'imbl-offset',
-              L.featureGroup(
-                offsetLines.map((line) =>
-                  L.polyline(line, {
-                    color: offset.color,
-                    weight: 2,
-                    dashArray: '5, 5',
-                    interactive: false,
-                  })
-                )
-              ),
-              {
-                name: offset.name,
-                distanceKm: offset.distanceKm,
-              }
-            );
-            if (offsetLayer) visibleLimitCount += 1;
-          } catch (error) {
-            const message =
-              error instanceof Error ? error.message : String(error);
-            console.warn('Invalid IMBL offset geometry', {
-              name: offset.name,
-              distanceKm: offset.distanceKm,
-              error: message,
-            });
-          }
+          // The zone offset polyline is now INTERACTIVE — hovering it
+          // (or its label) reveals the zone label. The IMBL main line +
+          // coastline stay non-interactive so they don't steal hover
+          // events from the vessel markers.
+          const polylines = offsetLines.map((line) =>
+            L.polyline(line, {
+              color: offset.color,
+              weight: 2.5,
+              dashArray: '5, 5',
+              // A wider invisible hit-area makes the thin dashed line
+              // easier to grab with the cursor without changing how it
+              // looks.
+              interactive: true,
+              bubblingMouseEvents: false,
+              // L.polygon-style soft hit-padding works via pathOptions
+              // for SVG; we approximate with a slightly heavier stroke
+              // and a transparent outer "halo" polyline below.
+            })
+          );
+
+          // Invisible "hit halo" — a wider, fully transparent polyline
+          // underneath the dashed one so the user doesn't need pixel-
+          // perfect aim. Pointer events on the halo bubble up to the
+          // dashed line above.
+          const hitLines = offsetLines.map((line) =>
+            L.polyline(line, {
+              color: offset.color,
+              weight: 16,
+              opacity: 0,
+              interactive: true,
+              bubblingMouseEvents: false,
+              className: 'imbl-offset-hitarea',
+            })
+          );
+
+          const offsetLayer = safeAddLayer(
+            'imbl-offset',
+            L.featureGroup([...polylines, ...hitLines]),
+            { name: offset.name, distanceKm: offset.distanceKm }
+          );
+          if (offsetLayer) visibleLimitCount += 1;
 
           const mid = getMidpointLatLngFromFeature(offset.feature);
           if (!mid || !mid.every(Number.isFinite)) {
@@ -999,23 +1139,92 @@ export default function LeafletMap({
             return;
           }
 
-          try {
+          // Build the label marker but keep it OFF the map by default.
+          // We add it lazily on hover and remove it on hover-out. The
+          // marker position tracks the cursor (not the line's midpoint)
+          // so it always shows up *at* the pointer — that's where the
+          // user is looking.
+          let labelMarker = null;
+          let hideTimer = null;
+          const buildLabelMarker = () =>
             L.marker(mid, {
               icon: L.divIcon({
-                className: 'eez-label',
-                html: `<div style="background:${offset.color};color:#fff;padding:4px 9px;border-radius:7px;font-size:12px;white-space:nowrap;box-shadow:0 2px 10px rgba(0,0,0,0.45);font-weight:700;border:1px solid rgba(255,255,255,0.3);">${offset.name} (${offset.distanceKm} km)</div>`,
+                className: 'eez-label eez-label--hidden',
+                html: `<div style="background:${offset.color};color:#fff;padding:5px 11px;border-radius:7px;font-size:12px;white-space:nowrap;box-shadow:0 4px 14px rgba(0,0,0,0.55);font-weight:700;border:1px solid rgba(255,255,255,0.35);letter-spacing:0.02em;">${offset.name} (${offset.distanceKm} km)</div>`,
                 iconSize: [180, 28],
                 iconAnchor: [90, 14],
               }),
-            }).addTo(map);
-          } catch (error) {
-            const message =
-              error instanceof Error ? error.message : String(error);
-            console.warn('[browser] Invalid IMBL offset label', {
-              name: offset.name,
-              distanceKm: offset.distanceKm,
-              error: message,
+              // Non-interactive so the label doesn't trap hover events
+              // meant for the line below it.
+              interactive: false,
+              keyboard: false,
+              riseOnHover: true,
             });
+
+          // Place (or move) the label at the cursor's lat/lng and make
+          // sure it's visible. Called on every mousemove while the
+          // pointer is over one of the line/hit-halo paths.
+          const placeLabel = (latlng) => {
+            if (!map || !latlng) return;
+            if (hideTimer) {
+              clearTimeout(hideTimer);
+              hideTimer = null;
+            }
+            if (!labelMarker) {
+              labelMarker = buildLabelMarker();
+              labelForOffset.set(offset.name, labelMarker);
+              labelMarker.addTo(map);
+              requestAnimationFrame(() => {
+                const el = labelMarker?.getElement();
+                if (el) el.classList.remove('eez-label--hidden');
+              });
+            } else if (!map.hasLayer(labelMarker)) {
+              labelMarker.addTo(map);
+              requestAnimationFrame(() => {
+                const el = labelMarker?.getElement();
+                if (el) el.classList.remove('eez-label--hidden');
+              });
+            }
+            // Anchor the label exactly on the pointer.
+            labelMarker.setLatLng(latlng);
+            const el = labelMarker.getElement();
+            if (el) el.classList.remove('eez-label--hidden');
+            // Visual feedback on the line: bump weight + opacity so the
+            // user can see which zone they inspected.
+            for (const pl of polylines) {
+              pl.setStyle({ weight: 3.5, opacity: 1 });
+            }
+          };
+
+          const scheduleHide = () => {
+            // 80ms grace window — if the cursor moves between the dashed
+            // line and its invisible hit-halo, the mouseout/mouseover
+            // events fire in quick succession and we don't want the
+            // label to flicker. The same grace period covers the case
+            // where the user crosses from one zone to another.
+            if (hideTimer) clearTimeout(hideTimer);
+            hideTimer = setTimeout(() => {
+              hideTimer = null;
+              if (labelMarker && map && map.hasLayer(labelMarker)) {
+                map.removeLayer(labelMarker);
+              }
+              labelForOffset.delete(offset.name);
+              labelMarker = null;
+              for (const pl of polylines) {
+                pl.setStyle({ weight: 2.5, opacity: 0.85 });
+              }
+            }, 80);
+          };
+
+          for (const pl of [...polylines, ...hitLines]) {
+            // mousemove fires on every cursor pixel — perfect for
+            // re-anchoring the label to wherever the pointer is on the
+            // line.
+            pl.on('mousemove', (e) => placeLabel(e.latlng));
+            // mouseover fires once when the pointer enters the path
+            // — useful as the initial "show" trigger.
+            pl.on('mouseover', (e) => placeLabel(e.latlng));
+            pl.on('mouseout', scheduleHide);
           }
         });
       }
@@ -1073,14 +1282,6 @@ export default function LeafletMap({
         }, 100);
       });
 
-    // Initial selected vessel fallback
-    const initialBoat = {
-      boatId: selectedBoatIdRef.current || 'BOAT1',
-      lat: 9.8,
-      lon: 79.1,
-      zone: 'SAFE',
-    };
-
     // Path trail polyline
     const pathPolyline = L.polyline([], {
       color: '#38bdf8',
@@ -1094,8 +1295,86 @@ export default function LeafletMap({
 
     mapInstanceRef.current = map;
 
-    // Now upsert the initial boat after map is ready
-    upsertBoat(initialBoat, { shouldPan: false });
+    // No placeholder boat on mount — the demo-mode effect seeds the
+    // demo fleet, and in non-demo mode the backend socket populates
+    // real vessels via the initial REST fetch + 'locationUpdate'
+    // events. Avoids the floating "BOAT1" default the user kept
+    // seeing when nothing was connected.
+
+    // ── Weather hover inspector ────────────────────────────────────────
+    // Read the active weather value at the cursor's lat/lng and show a
+    // small callout. Throttled to ~30 fps so we don't sample the wind grid
+    // on every pixel of mouse movement.
+    const inspectorMove = (e) => {
+      // Bail early when the Weather tab isn't active — keeps the rest of
+      // the dashboard (Fleet / Sensors / Threats / etc.) free of the
+      // floating callout.
+      if (!inspectorEnabledRef.current) {
+        setInspector(null);
+        return;
+      }
+      const now = performance.now();
+      if (now - lastInspectorMoveRef.current < 33) return;
+      lastInspectorMoveRef.current = now;
+
+      const { lat, lng } = e.latlng;
+      const layer = weatherLayerRef.current;
+      const t = performance.now() / 1000;
+
+      let primary = '';
+      let secondary = '';
+      let palette = [220, 240, 255];
+      let sub = `${lat.toFixed(2)}°${lat >= 0 ? 'N' : 'S'}, ${lng.toFixed(2)}°${lng >= 0 ? 'E' : 'W'}`;
+
+      if (layer === 'wind') {
+        const s = windSample(lng, lat, t);
+        const { bft, name, kts } = bftDescribe(s.value);
+        const bearing = (Math.atan2(s.u, -s.v) * 180) / Math.PI; // direction wind blows TOWARD
+        const fromBearing = (bearing + 180) % 360;                // meteorological "from"
+        primary = `${name}`;
+        secondary = `${bft} Bft  ${compassArrow(fromBearing)} ${Math.round(fromBearing)}°`;
+        palette = windPaletteFor(bft);
+        sub = `${kts.toFixed(1)} kts · ${sub}`;
+      } else if (layer === 'clouds') {
+        const s = rainSample(lng, lat, t);
+        primary = `${s.value.toFixed(1)} mm/h`;
+        secondary = 'Precipitation';
+        palette = s.value > 10 ? [200,50,150] : s.value > 2 ? [50,150,250] : [100,200,250];
+      } else if (layer === 'storm') {
+        const s = rainSample(lng, lat, t);
+        primary = `${s.value.toFixed(1)} mm/h`;
+        secondary = s.value >= 10 ? 'Heavy' : s.value >= 2 ? 'Moderate' : s.value > 0 ? 'Light' : 'None';
+        palette = s.value >= 10 ? [255,0,0] : s.value >= 2 ? [50,100,220] : s.value > 0 ? [100,150,250] : [10,30,50];
+      } else if (layer === 'pressure') {
+        const s = pressSample(lng, lat, t);
+        primary = `${Math.round(s.value)} hPa`;
+        secondary = s.value < 1000 ? 'Low' : s.value > 1020 ? 'High' : 'Normal';
+        palette = s.value < 1000 ? [40,60,150] : s.value > 1020 ? [190,70,50] : [140,180,210];
+      } else {
+        // No weather layer active — just show coordinates.
+        primary = '—';
+        secondary = 'Select a weather layer';
+        palette = [100, 200, 255];
+      }
+
+      // Position: offset to the right of the cursor, flip to the left if
+      // near the right edge so the callout never gets clipped.
+      const w = mapRef.current?.clientWidth || 0;
+      const flipX = e.containerPoint.x > w - 180;
+      const x = flipX ? e.containerPoint.x - 14 : e.containerPoint.x + 14;
+      const y = e.containerPoint.y + 14;
+
+      setInspector({ x, y, lat, lng, primary, secondary, palette, sub });
+    };
+
+    const inspectorOut = () => setInspector(null);
+
+    mapRef.current.addEventListener('mouseleave', inspectorOut);
+    // L.Leaflet fires 'mousemove' with .latlng and .containerPoint on
+    // every cursor move — that's all we need, so don't double-bind the DOM
+    // mousemove (which would deliver a plain MouseEvent without latlng).
+    map.on('mousemove', inspectorMove);
+    map.on('mouseout', inspectorOut);
 
     // Leaflet needs invalidateSize after flex layout settles.
     // Stop auto-following when user manually pans or zooms.
@@ -1299,6 +1578,42 @@ export default function LeafletMap({
       .status-warning { background: #fff55b !important; box-shadow: 0 0 18px #fff55b; }
       .status-danger { background: #ff4a4a !important; box-shadow: 0 0 18px #ff4a4a; }
       .status-unknown { background: #38bdf8 !important; box-shadow: 0 0 14px #38bdf8; }
+
+      /* ── EEZ / zone boundary hover affordances ─────────────────── */
+      /* The hit-halo polylines are zero-opacity, but their cursor
+         should still signal "interactive" — otherwise users don't know
+         the dashed zone lines are hoverable. */
+      .imbl-offset-hitarea {
+        cursor: help;
+      }
+      /* The dashed zone lines themselves also signal interactivity on
+         hover. The line is 2.5px which is small, so the help cursor
+         on the surrounding hit-halo is the primary cue. */
+      .leaflet-overlay-pane path[stroke-dasharray]:hover {
+        cursor: help;
+      }
+      /* Zone labels are built off-map and added on hover. They fade
+         in via a small CSS transition for a softer feel. */
+      .eez-label {
+        background: transparent !important;
+        border: none !important;
+        opacity: 0;
+        transform: translateY(4px) scale(0.96);
+        transition:
+          opacity 160ms ease-out,
+          transform 180ms cubic-bezier(.2,.7,.3,1.2);
+        pointer-events: none;
+      }
+      .eez-label > div {
+        transform-origin: center;
+      }
+      /* When the label is added to the map we drop the hidden class so
+         the opacity transition plays. pointer-events stays disabled so
+         the marker doesn't intercept events aimed at the line below. */
+      .eez-label:not(.eez-label--hidden) {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
     `;
     document.head.appendChild(style);
     styleElRef.current = style;
@@ -1307,10 +1622,23 @@ export default function LeafletMap({
       window.clearTimeout(invalidateTimeoutShort);
       window.clearTimeout(invalidateTimeoutLong);
       ro.disconnect();
+      // Inspector listeners — Leaflet handles mousemove; DOM owns mouseleave.
+      if (mapRef.current) {
+        mapRef.current.removeEventListener('mouseleave', inspectorOut);
+      }
+      map.off('mousemove', inspectorMove);
+      map.off('mouseout', inspectorOut);
       map.off('dragstart', handleDragStart);
       if (trajectoryPolylineRef.current) {
         trajectoryPolylineRef.current.remove();
         trajectoryPolylineRef.current = null;
+      }
+      // Drop any hover-revealed EEZ labels so they don't outlive the map.
+      if (zoneLabelsRef?.current) {
+        for (const m of zoneLabelsRef.current.values()) {
+          try { map.removeLayer(m); } catch (_) {}
+        }
+        zoneLabelsRef.current.clear();
       }
       if (styleElRef.current) {
         styleElRef.current.remove();
@@ -1343,7 +1671,25 @@ export default function LeafletMap({
     primaryPathBoatIdRef.current = selectedBoatId;
     const boat = boatDataByIdRef.current.get(selectedBoatId);
     if (!boat) return;
-    pathRef.current = [[boat.lat, boat.lon]];
+    
+    let pastPoints = [[boat.lat, boat.lon]];
+    if (demoMode) {
+      const demoIdx = DEMO_FLEET_BOATS.findIndex(b => b.boatId === selectedBoatId);
+      if (demoIdx !== -1) {
+        const demoBoat = DEMO_FLEET_BOATS[demoIdx];
+        const state = fleetTicksRef.current[demoIdx];
+        if (state && state.idx !== undefined) {
+          pastPoints = [];
+          for (let i = Math.max(0, state.idx - 60); i <= state.idx; i++) {
+            const pt = demoBoat.route[i % demoBoat.route.length];
+            if (pt) pastPoints.push([pt.lat, pt.lon]);
+          }
+          if (pastPoints.length === 0) pastPoints = [[boat.lat, boat.lon]];
+        }
+      }
+    }
+    
+    pathRef.current = pastPoints;
     pathPolylineRef.current?.setLatLngs(pathRef.current);
     updateSelectedBoatState(boat, Date.now());
     refreshMarkerStyles();
@@ -1487,43 +1833,134 @@ export default function LeafletMap({
   ]);
 
   // ─── Demo Mode ─────────────────────────────────────────────────────────────
+  // Drives a 10-boat support fleet roaming randomly around the IMBL
+  // boundary. Each boat moves at its own per-boat cadence via phase
+  // offsets so the batch doesn't jitter synchronously.
   useEffect(() => {
     if (!demoMode) {
       if (demoIntervalRef.current) {
         clearInterval(demoIntervalRef.current);
         demoIntervalRef.current = null;
       }
+      
+      // Remove demo boats from the fleet map
+      if (boatDataByIdRef.current) {
+        let hasChanges = false;
+        DEMO_FLEET_BOATS.forEach(b => {
+          if (boatDataByIdRef.current.has(b.boatId)) {
+            boatDataByIdRef.current.delete(b.boatId);
+            hasChanges = true;
+            
+            // Remove marker from map
+            const marker = markerByBoatRef.current.get(b.boatId);
+            if (marker && mapInstanceRef.current) {
+              mapInstanceRef.current.removeLayer(marker);
+              markerByBoatRef.current.delete(b.boatId);
+            }
+          }
+        });
+        
+        if (hasChanges) {
+          onBoatsUpdate?.(Array.from(boatDataByIdRef.current.values()));
+        }
+      }
+      
+      // Reset status if socket isn't connected
+      if (!socketRef.current?.connected) {
+        onStatusUpdate?.('System Offline');
+      } else {
+        onStatusUpdate?.('Backend Connected');
+      }
+      
       return;
     }
     // Reset path for fresh demo run
     pathRef.current = [];
     pathPolylineRef.current?.setLatLngs([]);
     demoIndexRef.current = 0;
-    setIsTracking(true);
-    onStatusUpdate?.('Demo Mode Active');
+
+    // Per-boat cursors for the support fleet. Keep them on refs so the
+    // tick closure stays cheap.
+    fleetIndexRef.current = 0;
+    fleetTicksRef.current = DEMO_FLEET_BOATS.map((b, i) => ({
+      idx: b.phaseOffset % b.route.length,
+      ticksUntilNext: i % 3, // stagger the first tick too
+    }));
+
+    // Seed the demo fleet so all boats appear at their starting positions
+    // on tick 0 (otherwise the first appearance depends on each boat's
+    // phaseOffset and they pop in over the first few seconds).
+    const seedBoat = (boat, idx) => {
+      const pt = boat.route[idx % boat.route.length];
+      if (!pt) return;
+      upsertBoat(
+        {
+          boatId: boat.boatId,
+          lat: pt.lat,
+          lon: pt.lon,
+          zone: boat.forceZone || 'SAFE',
+        },
+        { shouldPan: false }
+      );
+    };
+    DEMO_FLEET_BOATS.forEach((b, i) => seedBoat(b, b.phaseOffset));
+
+
 
     demoIntervalRef.current = setInterval(() => {
       if (!mapInstanceRef.current) return;
-      const point = DEMO_ROUTE[demoIndexRef.current];
-      const lat = point.lat;
-      const lng = point.lon;
-      const demoBoatId = 'DEMO-BOAT1';
-      selectedBoatIdRef.current = demoBoatId;
-      primaryPathBoatIdRef.current = demoBoatId;
-      const demoZone = getZoneFromDistance(
-        calculateDistanceToImblBoundary(lat, lng)
-      );
-      upsertBoat(
-        {
-          boatId: demoBoatId,
-          lat,
-          lon: lng,
-          zone: geofenceZoneToBoatZone(demoZone),
-        },
-        { shouldPan: true }
-      );
-      demoIndexRef.current = (demoIndexRef.current + 1) % DEMO_ROUTE.length;
+      // ── Support fleet ────────────────────────────────────────────
+      // Only advance a single fleet boat per tick so the whole batch
+      // doesn't jitter synchronously. We round-robin through them.
+      for (let i = 0; i < DEMO_FLEET_BOATS.length; i++) {
+        const boat = DEMO_FLEET_BOATS[i];
+        const state = fleetTicksRef.current[i];
+        // Each fleet boat moves every Nth tick — driven by speedMs.
+        // We translate the desired ms cadence into a "move every Nth
+        // tick" using a simple accumulator.
+        const ticksPerStep = Math.max(1, Math.round(boat.speedMs / 250));
+        if (state.idx === undefined) state.idx = boat.phaseOffset;
+        if (state.ticksUntilNext === undefined) state.ticksUntilNext = i % ticksPerStep;
+        if (state.ticksUntilNext > 0) {
+          state.ticksUntilNext -= 1;
+          continue;
+        }
+        state.ticksUntilNext = ticksPerStep - 1;
+
+        const routePoint = boat.route[state.idx];
+        if (routePoint) {
+          // Pin each support boat to its corridor's zone. Without this,
+          // boats roaming near corridor edges would flicker between
+          // WARNING and DANGER as they crossed the band boundary on
+          // individual ticks.
+          const zone = boat.forceZone
+            ? boat.forceZone
+            : geofenceZoneToBoatZone(
+                getZoneFromDistance(
+                  calculateDistanceToImblBoundary(routePoint.lat, routePoint.lon)
+                )
+              );
+          upsertBoat(
+            {
+              boatId: boat.boatId,
+              lat: routePoint.lat,
+              lon: routePoint.lon,
+              zone,
+            },
+            { shouldPan: false, skipEmit: true }
+          );
+        }
+        state.idx = (state.idx + 1) % boat.route.length;
+      }
+      
+      emitBoats();
+
+      fleetIndexRef.current =
+        (fleetIndexRef.current + 1) % DEMO_FLEET_BOATS.length;
     }, 250);
+
+    setIsTracking(true);
+    onStatusUpdate?.('Demo Mode Active (10 boats)');
 
     return () => {
       if (demoIntervalRef.current) {
@@ -1546,6 +1983,35 @@ export default function LeafletMap({
   const weatherLayerInstanceRef = useRef(null);
   const rafRef = useRef(null);
   const weatherGridRefreshRef = useRef(null);
+  // H/L centre markers — drawn only while the pressure layer is active.
+  const pressureMarkersRef = useRef([]);
+  const pressureRefreshTimerRef = useRef(null);
+  // Storm-cell overlay (circles + halos + lightning icons + track polylines).
+  const stormCellLayersRef = useRef([]);
+  const stormRefreshTimerRef = useRef(null);
+  const cloudsTileLayerRef = useRef(null);
+
+  useEffect(() => {
+    if (!mapInstanceRef.current) return;
+    const map = mapInstanceRef.current;
+    
+    if (cloudsTileOn) {
+      if (!cloudsTileLayerRef.current) {
+        cloudsTileLayerRef.current = L.tileLayer('https://tile.openweathermap.org/map/clouds_new/{z}/{x}/{y}.png?appid=a63a66e50c1159983af837acb9e4efa8', {
+          maxZoom: 18,
+          opacity: 0.6,
+          attribution: '&copy; OpenWeatherMap'
+        });
+      }
+      if (!map.hasLayer(cloudsTileLayerRef.current)) {
+        cloudsTileLayerRef.current.addTo(map);
+      }
+    } else {
+      if (cloudsTileLayerRef.current && map.hasLayer(cloudsTileLayerRef.current)) {
+        map.removeLayer(cloudsTileLayerRef.current);
+      }
+    }
+  }, [cloudsTileOn]);
 
   useEffect(() => {
     const map = mapInstanceRef.current;
@@ -1560,13 +2026,171 @@ export default function LeafletMap({
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     }
-    
+
+    // Drop any pressure H/L markers left over from a previous view.
+    for (const m of pressureMarkersRef.current) {
+      try { map.removeLayer(m); } catch (_) {}
+    }
+    pressureMarkersRef.current = [];
+    if (pressureRefreshTimerRef.current) {
+      clearInterval(pressureRefreshTimerRef.current);
+      pressureRefreshTimerRef.current = null;
+    }
+
+    // Custom Leaflet div-icon for an H / L centre — black rounded box,
+    // white text, with a tiny downward arrow so it reads as a label rather
+    // than a marker. Mirrors the reference synoptic-chart pins.
+    const buildPressureIcon = (type, pressure) => {
+      const label = `${Math.round(pressure)} hPa`;
+      const html = `
+        <div style="display:flex;flex-direction:column;align-items:center;pointer-events:none;">
+          <div style="background:#0b1117;color:#fff;font:600 11px/1 'JetBrains Mono',monospace;padding:4px 8px;border-radius:4px;border:1px solid rgba(255,255,255,0.18);box-shadow:0 2px 6px rgba(0,0,0,0.45);white-space:nowrap;letter-spacing:0.04em;">
+            <span style="opacity:0.85;margin-right:4px;">${type}</span>${label}
+          </div>
+          <div style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:6px solid #0b1117;margin-top:-1px;"></div>
+        </div>`;
+      return L.divIcon({
+        html,
+        className: 'pressure-centre-icon',
+        iconSize: [70, 28],
+        iconAnchor: [35, 28],
+      });
+    };
+
+    const renderPressureCentres = () => {
+      // Remove existing markers first so we don't pile up across moveends.
+      for (const m of pressureMarkersRef.current) {
+        try { map.removeLayer(m); } catch (_) {}
+      }
+      pressureMarkersRef.current = [];
+
+      const centres = weatherGrid.findPressureCentres();
+      for (const c of centres) {
+        const m = L.marker([c.lat, c.lng], { icon: buildPressureIcon(c.type, c.pressure), interactive: false });
+        m.addTo(map);
+        pressureMarkersRef.current.push(m);
+      }
+    };
+
+    // ── Storm cells ───────────────────────────────────────────────────
+    // For each local precipitation maximum, render a coloured halo circle,
+    // a forecast-track polyline (orange dots), and a couple of lightning
+    // bolt icons inside the cell. Sizes scale with map zoom so the markers
+    // stay readable as you pan / zoom.
+    const cellColour = (mm) => {
+      if (mm >= 10) return '#ff2810';
+      if (mm >= 5)  return '#d83cb0';
+      if (mm >= 2)  return '#5a46dc';
+      if (mm >= 0.6) return '#2b80f0';
+      return '#7eb6ee';
+    };
+    const buildLightningIcon = () => L.divIcon({
+      html: '<div style="font: 700 14px/1 sans-serif; color: #fff7c0; text-shadow: 0 0 4px #ffae00, 0 0 1px #000; transform: translate(-50%, -100%); pointer-events: none;">⚡</div>',
+      className: 'storm-lightning-icon',
+      iconSize: [16, 16],
+      iconAnchor: [8, 16],
+    });
+
+    const renderStormCells = () => {
+      // Tear down previous layer
+      for (const obj of stormCellLayersRef.current) {
+        try { map.removeLayer(obj); } catch (_) {}
+      }
+      stormCellLayersRef.current = [];
+
+      const cells = weatherGrid.findStormCells();
+      const zoom = map.getZoom();
+      // Size grows at low zoom (so cells stay visible at country scale)
+      // and shrinks at high zoom (so they don't blot out a city).
+      const zoomFactor = Math.max(0, Math.min(1, (8 - zoom) / 6));
+      const baseRadius = 12000 + zoomFactor * 22000; // metres
+
+      for (const c of cells) {
+        const r = baseRadius * (0.7 + Math.min(1.6, c.intensity / 6));
+        const colour = cellColour(c.intensity);
+
+        // Halo circle.
+        const halo = L.circle([c.lat, c.lng], {
+          radius: r,
+          color: colour,
+          weight: 2,
+          opacity: 0.85,
+          fillColor: colour,
+          fillOpacity: 0.18,
+          interactive: false,
+        });
+        halo.addTo(map);
+        stormCellLayersRef.current.push(halo);
+
+        // Forecast track — simple westward drift (good enough for a demo,
+        // and matches how tropical cells in the Indian Ocean typically move).
+        // Each cell gets a 7-step polyline showing the next ~6h.
+        const trackPoints = [];
+        for (let k = 0; k < 7; k++) {
+          trackPoints.push([c.lat + (Math.random() - 0.5) * 0.4, c.lng - k * 0.6 - 0.1]);
+        }
+        const track = L.polyline(trackPoints, {
+          color: '#ffae00',
+          weight: 2.5,
+          opacity: 0.9,
+          dashArray: '2,4',
+          interactive: false,
+        });
+        track.addTo(map);
+        stormCellLayersRef.current.push(track);
+
+        // Coloured dots on the track.
+        for (const p of trackPoints) {
+          const dot = L.circleMarker(p, {
+            radius: 3 + Math.min(3, c.intensity / 4),
+            color: '#ff7a1a',
+            weight: 1,
+            fillColor: '#ffae00',
+            fillOpacity: 1,
+            interactive: false,
+          });
+          dot.addTo(map);
+          stormCellLayersRef.current.push(dot);
+        }
+
+        // A couple of lightning bolts inside the cell.
+        const boltCount = Math.min(4, 1 + Math.floor(c.intensity / 2));
+        for (let b = 0; b < boltCount; b++) {
+          // Random offset in degrees, scaled by radius
+          const dLat = (Math.random() - 0.5) * (r / 110000);
+          const dLng = (Math.random() - 0.5) * (r / 90000);
+          const bolt = L.marker([c.lat + dLat, c.lng + dLng], {
+            icon: buildLightningIcon(),
+            interactive: false,
+          });
+          bolt.addTo(map);
+          stormCellLayersRef.current.push(bolt);
+        }
+      }
+    };
+
     let gridTimeout = null;
     const refreshWeather = () => {
       clearTimeout(gridTimeout);
       gridTimeout = setTimeout(async () => {
         if(!mapInstanceRef.current) return;
         await weatherGrid.refreshGrid(mapInstanceRef.current.getBounds(), 8, 6);
+        // Pressure: refresh the GFS grid + redraw the colour gradient
+        // field and the H/L centre markers.
+        if (weatherLayer === 'pressure') {
+          await weatherGrid.refreshPressureGrid(mapInstanceRef.current.getBounds(), 8, 6);
+          renderPressureCentres();
+        }
+        // Clouds: refresh the cloud_cover grid (no cells, just the field).
+        if (weatherLayer === 'clouds') {
+          await weatherGrid.refreshCloudGrid(mapInstanceRef.current.getBounds(), 10, 8);
+        }
+        // Storm: refresh the precipitation grid + rebuild storm cells
+        // (the only place rain cells + halos are drawn).
+        if (weatherLayer === 'storm') {
+          await weatherGrid.refreshPrecipGrid(mapInstanceRef.current.getBounds(), 10, 8);
+          renderStormCells();
+        }
         const layers = weatherLayerInstanceRef.current;
         if(layers){
            const arr = Array.isArray(layers) ? layers : [layers];
@@ -1583,20 +2207,46 @@ export default function LeafletMap({
       if (weatherLayer === 'wind') {
         layers.push(new WindParticleLayer(windSample, { particleCount: 1800, speedFactor: 1.2 }));
       } else if (weatherLayer === 'clouds') {
-        layers.push(new GradientFieldLayer(cloudsSample, cloudsStops, { opacity: 0.65, cellSize: 4, blur: 5 }));
+        // CLOUDS tab: cloud cover (%) from Open-Meteo GFS — separate from
+        // the storm ramp so precipitation stays exclusive to STORM.
+        layers.push(new GradientFieldLayer(cloudsSample, cloudStops, { opacity: 0.75, cellSize: 4, blur: 5 }));
       } else if (weatherLayer === 'storm') {
+        // STORM tab: precipitation field (mm/h) + storm cells, drawn from
+        // the precip grid. Only place the user sees rain intensity.
         layers.push(new GradientFieldLayer(rainSample, stormStops, { opacity: 0.8, cellSize: 4, blur: 4 }));
       } else if (weatherLayer === 'pressure') {
+        // PRESSURE: a thin colour gradient so the synoptic pattern reads
+        // at a glance, plus the H/L pin markers. No isobars, no labels on
+        // the field itself — the pins carry the labelled highs/lows.
         layers.push(new GradientFieldLayer(pressSample, pressureStops, {
-          contourLevels: [975, 985, 995, 1005, 1015, 1025, 1035, 1045],
-          opacity: 0.8, cellSize: 4, blur: 4
+          opacity: 0.55, cellSize: 4, blur: 6
         }));
+        // Auto-refresh the pressure grid every 30 min — Open-Meteo GFS
+        // updates hourly, so half that is plenty fresh.
+        pressureRefreshTimerRef.current = setInterval(() => {
+          if (!mapInstanceRef.current) return;
+          weatherGrid.refreshPressureGrid(mapInstanceRef.current.getBounds(), 8, 6).then(() => {
+            renderPressureCentres();
+          });
+        }, 30 * 60 * 1000);
+        // Auto-refresh storm cells every 15 minutes so the storm layer
+        // tracks live GFS updates without the user panning.
+        stormRefreshTimerRef.current = setInterval(() => {
+          if (!mapInstanceRef.current) return;
+          weatherGrid.refreshPrecipGrid(mapInstanceRef.current.getBounds(), 10, 8).then(() => {
+            renderStormCells();
+            const arr = Array.isArray(weatherLayerInstanceRef.current) ? weatherLayerInstanceRef.current : [weatherLayerInstanceRef.current];
+            arr.forEach(l => { if (l._redraw) l._redraw(); });
+          });
+        }, 15 * 60 * 1000);
+        // Re-render storm cells on zoom so the radius/halo scale correctly.
+        map.on('zoomend', renderStormCells);
       }
 
       if (layers.length > 0) {
         weatherLayerInstanceRef.current = layers;
         layers.forEach(l => map.addLayer(l));
-        
+
         // Initial fetch
         if (weatherGridRefreshRef.current) weatherGridRefreshRef.current();
 
@@ -1617,6 +2267,7 @@ export default function LeafletMap({
 
     return () => {
       map.off('moveend', refreshWeather);
+      clearTimeout(gridTimeout);
       if (weatherLayerInstanceRef.current) {
         const currentLayers = Array.isArray(weatherLayerInstanceRef.current) ? weatherLayerInstanceRef.current : [weatherLayerInstanceRef.current];
         currentLayers.forEach(l => map.removeLayer(l));
@@ -1626,7 +2277,24 @@ export default function LeafletMap({
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
-    };
+      for (const m of pressureMarkersRef.current) {
+        try { map.removeLayer(m); } catch (_) {}
+      }
+      pressureMarkersRef.current = [];
+      if (pressureRefreshTimerRef.current) {
+        clearInterval(pressureRefreshTimerRef.current);
+        pressureRefreshTimerRef.current = null;
+      }
+      for (const layer of stormCellLayersRef.current) {
+        try { map.removeLayer(layer); } catch (_) {}
+      }
+      stormCellLayersRef.current = [];
+      if (stormRefreshTimerRef.current) {
+        clearInterval(stormRefreshTimerRef.current);
+        stormRefreshTimerRef.current = null;
+      }
+      map.off('zoomend', renderStormCells);
+    }
   }, [weatherLayer]);
 
   // Dedicated unmount cleanup
@@ -1636,6 +2304,10 @@ export default function LeafletMap({
         const currentLayers = Array.isArray(weatherLayerInstanceRef.current) ? weatherLayerInstanceRef.current : [weatherLayerInstanceRef.current];
         currentLayers.forEach(l => mapInstanceRef.current.removeLayer(l));
         weatherLayerInstanceRef.current = null;
+      }
+      if (cloudsTileLayerRef.current && mapInstanceRef.current) {
+        mapInstanceRef.current.removeLayer(cloudsTileLayerRef.current);
+        cloudsTileLayerRef.current = null;
       }
     };
   }, []);
@@ -1654,8 +2326,57 @@ export default function LeafletMap({
       <div
         ref={mapRef}
         className="w-full h-full"
-        style={{ minHeight: '520px', borderRadius: '1rem' }}
+        style={{
+          minHeight: '520px',
+          borderRadius: '1rem',
+          // Crosshair cursor when hovering a weather layer makes the
+          // "this spot has a value" affordance obvious — only while the
+          // Weather tab is the active view.
+          cursor: enableHoverInspector && weatherLayer ? 'crosshair' : undefined,
+        }}
       />
+
+      {/* ── Weather hover inspector callout ───────────────────────────── */}
+      {inspector && (
+        <div
+          className="absolute pointer-events-none z-[1100]"
+          style={{
+            left: inspector.x,
+            top: inspector.y,
+            transform: 'translate(0, 0)',
+            willChange: 'transform',
+          }}
+        >
+          <div
+            className="rounded-md px-2.5 py-1.5 shadow-[0_8px_24px_rgba(0,0,0,0.55)] backdrop-blur-md border border-white/15 min-w-[140px]"
+            style={{
+              background: `linear-gradient(180deg, rgba(8,14,22,0.92), rgba(8,14,22,0.82))`,
+              borderTop: `2px solid rgb(${inspector.palette.join(',')})`,
+            }}
+          >
+            {/* Top row: layer name (primary) */}
+            <div className="flex items-center gap-1.5">
+              <span
+                className="inline-block w-1.5 h-1.5 rounded-full"
+                style={{ background: `rgb(${inspector.palette.join(',')})`, boxShadow: `0 0 6px rgb(${inspector.palette.join(',')})` }}
+              />
+              <span className="text-[12px] font-bold tracking-wide text-white whitespace-nowrap">
+                {inspector.primary}
+              </span>
+            </div>
+            {/* Sub-row: secondary (Bft + arrow, % etc) */}
+            {inspector.secondary && (
+              <div className="text-[11px] text-white/80 mt-0.5 font-mono whitespace-nowrap">
+                {inspector.secondary}
+              </div>
+            )}
+            {/* Lat/Lng */}
+            <div className="text-[10px] text-white/55 mt-1 font-mono whitespace-nowrap">
+              {inspector.sub}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="absolute bottom-[90px] right-[10px] z-[1000]">
         <div className="flex flex-col items-center gap-2">

@@ -71,20 +71,29 @@ export default function MaritimeDashboard() {
   const navigate = useNavigate();
   const [vesselId, setVesselId] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
-  const [activeNav, setActiveNav] = useState('Fleet');
+  const [activeNav, setActiveNav] = useState(null);
   const [activeTopTab, setActiveTopTab] = useState('TACTICAL');
   const [showSettings, setShowSettings] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
-  const [weatherLayer, setWeatherLayer] = useState('wind');
+  const [weatherLayer, setWeatherLayer] = useState(null);
+  const [cloudsTileOn, setCloudsTileOn] = useState(false);
   const [boats, setBoats] = useState([]);
   const [alerts, setAlerts] = useState([]);
   const [selectedBoatId, setSelectedBoatId] = useState(null);
+  const activeBoatIdRef = useRef(null);
+  useEffect(() => {
+    activeBoatIdRef.current = selectedBoatId;
+  }, [selectedBoatId]);
   const [selectedBoat, setSelectedBoat] = useState(null);
   const [demoMode, setDemoMode] = useState(false);
   const [serverStatus, setServerStatus] = useState('Connecting...');
+  const [showDangerAlert, setShowDangerAlert] = useState(false);
+  const [dangerAlertBoat, setDangerAlertBoat] = useState('');
+  // Right-side push-style alerts. Fired when any boat (real backend
+  // OR demo fleet) crosses into the WARNING boundary line. Up to 4
+  // visible at once; older ones fall off the bottom of the stack.
   const [toasts, setToasts] = useState([]);
-  const [showDangerModal, setShowDangerModal] = useState(false);
   const [cmdInput, setCmdInput] = useState('');
   const [systemStability, setSystemStability] = useState(99.8);
   const [logisticsData, setLogisticsData] = useState({ totalSupplyCarriers: 0, networkStatus: 'UNKNOWN', vessels: [] });
@@ -208,20 +217,106 @@ export default function MaritimeDashboard() {
     setSelectedBoatId(boat.boatId);
   }, []);
 
+  const addAlert = useCallback((msg, level) => {
+    const entry = { id: Date.now().toString(), time: fmtTime(), message: msg, level };
+    setAlerts(prev => [entry, ...prev.slice(0, 29)]);
+  }, []);
+
+  // Track per-boat zone transitions so we can write a quiet line into
+  // the bell-icon notifications panel AND fire a right-side push
+  // notification when any vessel crosses into the WARNING (or DANGER)
+  // boundary line. Throttled per boat+zone so the 250 ms demo tick
+  // doesn't spam.
+  const lastZoneByBoatRef = useRef(new Map());
+  const lastAlertAtRef = useRef(new Map());
+
+  // Push a self-contained alert card onto the right-side toast stack.
+  // Auto-dismisses after `durationMs` (default 6 s).
+  const pushWarningToast = useCallback((boatId, zone) => {
+    const id = `t-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const isDanger = zone === 'DANGER';
+    
+    if (isDanger) {
+      setShowDangerAlert(true);
+      setDangerAlertBoat(boatId);
+    }
+
+    setToasts(prev => [
+      ...prev,
+      {
+        id,
+        boatId,
+        zone,
+        title: isDanger ? 'DANGER ZONE BREACH' : 'WARNING LINE CROSSED',
+        body: isDanger
+          ? `${boatId} crossed into DANGER zone.`
+          : `${boatId} reached the WARNING boundary line.`,
+        durationMs: 6000,
+        createdAt: Date.now(),
+      },
+    ]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+      // Store in notification tab after popup is finished
+      addAlert(
+        isDanger ? `${boatId} crossed into DANGER zone.` : `${boatId} reached the WARNING boundary line.`,
+        isDanger ? 'danger' : 'warning'
+      );
+    }, 6000);
+  }, [addAlert]);
+
   const handleBoatsUpdate = useCallback((nextBoats) => {
       setBoats(nextBoats);
-      if (!selectedBoatId && nextBoats.length > 0) {
+
+      // Per-boat zone history: log every upgrade transition into the
+      // bell-icon notifications panel, AND fire a right-side push
+      // toast when the boat reaches WARNING (or DANGER) — the user
+      // explicitly asked for a popup on the WARNING line.
+      const history = lastZoneByBoatRef.current;
+      const lastAlert = lastAlertAtRef.current;
+      const now = Date.now();
+      const RANK = { SAFE: 0, ALERT: 1, WARNING: 2, DANGER: 3 };
+      for (const b of nextBoats) {
+        const prev = history.get(b.boatId) ?? 'SAFE';
+        const next = b.zone ?? 'SAFE';
+        if (prev === next) continue;
+        history.set(b.boatId, next);
+        const prevRank = RANK[prev] ?? 0;
+        const nextRank = RANK[next] ?? 0;
+        if (nextRank <= prevRank) continue;
+        if (next === 'SAFE') continue;
+        const key = `${b.boatId}|${next}`;
+        const lastAt = lastAlert.get(key) ?? 0;
+        if (now - lastAt < 8000) continue;
+        lastAlert.set(key, now);
+        addAlert(
+          `Vessel ${b.boatId} entered ${next} zone.`,
+          next === 'DANGER' ? 'danger' : next === 'WARNING' ? 'warning' : 'info'
+        );
+        // Right-side push popup on WARNING line breach (and on
+        // DANGER, since DANGER > WARNING). ALERT is too noisy to
+        // pop up — it just gets a quiet log entry.
+        if (next === 'WARNING' || next === 'DANGER') {
+          pushWarningToast(b.boatId, next);
+        }
+      }
+      // Garbage-collect: forget boats that have left the fleet.
+      for (const key of history.keys()) {
+        if (!nextBoats.some(b => b.boatId === key)) history.delete(key);
+      }
+
+      if (!activeBoatIdRef.current && nextBoats.length > 0) {
         setSelectedBoatId(nextBoats[0].boatId);
         setSelectedBoat(nextBoats[0]);
         return;
       }
-      if (selectedBoatId) {
-        const selected = nextBoats.find((b) => b.boatId === selectedBoatId) || null;
+      if (activeBoatIdRef.current) {
+        const selected = nextBoats.find((b) => b.boatId === activeBoatIdRef.current) || null;
         if (selected) {
           setSelectedBoat(selected);
         }
       }
-  }, [selectedBoatId]);
+  }, [addAlert, pushWarningToast]);
 
   // Backend connection & polling
   useEffect(() => {
@@ -335,29 +430,15 @@ export default function MaritimeDashboard() {
   const currentSpeed = selectedBoat?.speed ?? 0;
   const nearestEEZ = 'SCS-ZONE-7B';
 
-  const addToast = useCallback((msg, zone) => {
-    const id = Date.now().toString();
-    setToasts(prev => [...prev, { id, message: msg, zone }]);
-    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
-  }, []);
-
-  const addAlert = useCallback((msg, level) => {
-    const entry = { id: Date.now().toString(), time: fmtTime(), message: msg, level };
-    setAlerts(prev => [entry, ...prev.slice(0, 29)]);
-  }, []);
-
-  // Zone transition toasts
-  useEffect(() => {
+  // Zone transition for the SELECTED boat's proximity banner (top of screen).
+// The push-toast system in handleBoatsUpdate already covers every vessel.
+useEffect(() => {
     const prev = previousZoneRef.current;
     if (currentZone !== prev && currentZone !== 'UNKNOWN' && prev !== 'UNKNOWN') {
-       if (currentZone === 'DANGER' || currentZone === 'WARNING' || currentZone === 'ALERT') {
-          addToast(`${selectedBoat?.boatId || 'Vessel'} entered ${currentZone}`, currentZone);
-          addAlert(`Vessel ${selectedBoat?.boatId || 'UNKNOWN'} entered ${currentZone} zone.`, currentZone === 'DANGER' ? 'danger' : currentZone === 'WARNING' ? 'warning' : 'info');
-          if (currentZone === 'DANGER') setShowDangerModal(true);
-       }
+      // No-op — keep the ref in sync so the next comparison is fresh.
     }
     previousZoneRef.current = currentZone;
-  }, [currentZone, selectedBoat, addToast, addAlert]);
+  }, [currentZone]);
 
   const filteredBoats = vesselId ? boats.filter(b => b.boatId.toLowerCase().includes(vesselId.toLowerCase())) : boats;
 
@@ -375,12 +456,7 @@ export default function MaritimeDashboard() {
     { label: 'Live Feed', icon: <svg viewBox="0 0 24 24" className="w-[19px] h-[20px]"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z" fill="currentColor"/></svg> },
   ];
 
-  const alertLevel = boats.reduce((worst, b) => {
-    const rank = { SAFE: 0, ALERT: 1, WARNING: 2, DANGER: 3 };
-    return rank[b.zone] > rank[worst] ? b.zone : worst;
-  }, 'SAFE');
-
-  const isConnected = serverStatus === 'Backend Connected' || serverStatus === 'Demo Mode Active';
+  const isConnected = serverStatus === 'Backend Connected' || serverStatus?.startsWith('Demo Mode Active');
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-[#020817]" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
@@ -400,18 +476,24 @@ export default function MaritimeDashboard() {
               selectedBoatId={selectedBoatId}
               demoMode={demoMode}
               weatherLayer={activeNav === 'Weather' ? weatherLayer : null}
+              cloudsTileOn={activeNav === 'Weather' ? cloudsTileOn : false}
+              // Hover inspector (the floating callout under the cursor)
+              // is only useful on the Weather tab — disable everywhere
+              // else so it doesn't pop up over Fleet / Sensors / etc.
+              enableHoverInspector={activeNav === 'Weather' && activeTopTab === 'TACTICAL'}
+              // Cloud-cover tile toggle (independent of the active layer).
+              cloudsTileOn={cloudsTileOn}
             />
         </Suspense>
       </div>
 
       {/* ── Weather Canvas Overlay (SkyLayer UI) ── */}
 
-      {/* ── Top Navigation Bar (Floating) ── */}
-      <header className="absolute top-4 left-4 right-4 h-[52px] bg-[rgba(8,15,17,0.75)] backdrop-blur-md border border-[rgba(59,73,76,0.5)] rounded-2xl px-6 flex items-center gap-8 z-20 shadow-[0_8px_32px_rgba(0,0,0,0.4)] pointer-events-auto">
-        <span className="text-[#c3f5ff] text-[17px] font-bold tracking-[0.06em] shrink-0" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
+      <header className="absolute top-4 left-4 right-4 h-[52px] bg-gradient-aegis-rich grain-overlay glass-panel rounded-2xl px-6 flex items-center gap-8 z-20 pointer-events-auto">
+        <span className="text-[#c3f5ff] text-[17px] font-bold tracking-[0.06em] shrink-0 z-10 relative" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
           AEGIS MARITIME COMMAND
         </span>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 z-10 relative">
           {['TACTICAL', 'BOUNDARY GRID', 'LOGISTICS', 'COMMS', 'DETAILED LOGS'].map(tab => (
             <button key={tab} onClick={() => setActiveTopTab(tab)} className={`px-4 py-1.5 text-[11px] tracking-widest rounded-md transition-all cursor-pointer ${activeTopTab === tab ? 'text-[#c3f5ff] bg-[rgba(195,245,255,0.08)] font-semibold shadow-inner border border-[rgba(0,218,243,0.3)]' : 'text-[#bac9cc] border border-transparent hover:text-[#dce4e5] hover:bg-[rgba(255,255,255,0.04)]'}`}>
               {tab}
@@ -419,28 +501,22 @@ export default function MaritimeDashboard() {
           ))}
         </div>
         
-<div className="flex-1 flex justify-center pointer-events-none"></div>
+<div className="flex-1 flex justify-center pointer-events-none z-10 relative"></div>
 
-        <div className="flex items-center gap-3 px-4 py-1.5 rounded-md border text-[11px] font-bold tracking-widest shadow-inner shrink-0"
-          style={{ borderColor: zoneColor(alertLevel), color: zoneColor(alertLevel), background: zoneBg(alertLevel) }}>
-          <span className="animate-pulse-dot">⚠</span>
-          ALERT LEVEL: {alertLevel === 'SAFE' ? 'GREEN' : alertLevel === 'ALERT' ? 'BLUE' : alertLevel === 'WARNING' ? 'YELLOW' : 'RED'}
-        </div>
-        
-        <div className="flex items-center gap-4 ml-2 shrink-0">
+        <div className="flex items-center gap-4 ml-2 shrink-0 z-10 relative">
           {/* Settings */}
           <div className="relative flex items-center">
-            <button onClick={() => {setShowSettings(!showSettings); setShowNotifications(false); setShowProfile(false);}} className={`transition-colors cursor-pointer ${showSettings ? 'text-[#c3f5ff]' : 'text-[#bac9cc] hover:text-[#c3f5ff]'}`}>
+            <button onClick={() => {setShowSettings(!showSettings); setShowNotifications(false); setShowProfile(false);}} className={`transition-colors cursor-pointer icon-pop ${showSettings ? 'text-[#c3f5ff]' : 'text-[#bac9cc] hover:text-[#c3f5ff]'}`}>
               <svg viewBox="0 0 20 20" className="w-5 h-5"><path d={svgPaths.p3cdadd00} fill="currentColor" /></svg>
             </button>
             {showSettings && (
-              <div className="absolute top-[180%] right-[-10px] w-64 bg-[rgba(10,15,20,0.95)] backdrop-blur-xl border border-[rgba(59,73,76,0.6)] rounded-xl shadow-[0_15px_50px_rgba(0,0,0,0.6)] p-4 z-[5000] animate-fade-in">
-                 <div className="text-[#c3f5ff] text-[12px] font-bold tracking-widest mb-3 border-b border-[rgba(59,73,76,0.5)] pb-2">SYSTEM SETTINGS</div>
-                 <div className="flex flex-col gap-3 text-[11px] text-[#dce4e5]">
+              <div className="absolute top-[180%] right-[-10px] w-64 bg-gradient-aegis-rich grain-overlay glass-panel rounded-xl shadow-[0_15px_50px_rgba(0,0,0,0.6)] p-4 z-[5000] animate-fade-in overflow-hidden">
+                 <div className="text-[#c3f5ff] text-[12px] font-bold tracking-widest mb-3 border-b border-[rgba(8,164,167,0.3)] pb-2 relative z-10">SYSTEM SETTINGS</div>
+                 <div className="flex flex-col gap-3 text-[11px] text-[#dce4e5] relative z-10">
                    <label className="flex items-center justify-between cursor-pointer group"><span className="tracking-wider group-hover:text-[#00daf3] transition-colors">AUDIO ALERTS</span><input type="checkbox" defaultChecked className="accent-[#00daf3]" /></label>
                    <label className="flex items-center justify-between cursor-pointer group"><span className="tracking-wider group-hover:text-[#00daf3] transition-colors">HIGH CONTRAST</span><input type="checkbox" className="accent-[#00daf3]" /></label>
                    <label className="flex items-center justify-between cursor-pointer group"><span className="tracking-wider group-hover:text-[#00daf3] transition-colors">DATA STREAM</span><input type="checkbox" defaultChecked className="accent-[#00daf3]" /></label>
-                   <label className="flex items-center justify-between cursor-pointer group mt-2 pt-2 border-t border-[rgba(59,73,76,0.3)]"><span className="tracking-wider text-[#ef4444] font-bold">CLEAR CACHE</span></label>
+                   <label className="flex items-center justify-between cursor-pointer group mt-2 pt-2 border-t border-[rgba(8,164,167,0.3)]"><span className="tracking-wider text-[#ef4444] font-bold">CLEAR CACHE</span></label>
                  </div>
               </div>
             )}
@@ -448,20 +524,20 @@ export default function MaritimeDashboard() {
           
           {/* Notifications */}
           <div className="relative flex items-center">
-            <button onClick={() => {setShowNotifications(!showNotifications); setShowSettings(false); setShowProfile(false);}} className={`transition-colors cursor-pointer relative ${showNotifications ? 'text-[#c3f5ff]' : 'text-[#bac9cc] hover:text-[#c3f5ff]'}`}>
+            <button onClick={() => {setShowNotifications(!showNotifications); setShowSettings(false); setShowProfile(false);}} className={`transition-colors cursor-pointer icon-pop relative ${showNotifications ? 'text-[#c3f5ff]' : 'text-[#bac9cc] hover:text-[#c3f5ff]'}`}>
               <svg viewBox="0 0 16 20" className="w-4 h-5"><path d={svgPaths.p164b49c0} fill="currentColor" /></svg>
               {alerts.length > 0 && <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-[#ef4444] rounded-full animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.8)]" />}
             </button>
             {showNotifications && (
-              <div className="absolute top-[180%] right-[-10px] w-80 bg-[rgba(10,15,20,0.95)] backdrop-blur-xl border border-[rgba(59,73,76,0.6)] rounded-xl shadow-[0_15px_50px_rgba(0,0,0,0.6)] overflow-hidden z-[5000] flex flex-col max-h-[350px] animate-fade-in">
-                 <div className="bg-[rgba(30,40,45,0.8)] px-4 py-3 border-b border-[rgba(59,73,76,0.5)] flex justify-between items-center">
+              <div className="absolute top-[180%] right-[-10px] w-80 bg-gradient-aegis-rich grain-overlay glass-panel rounded-xl shadow-[0_15px_50px_rgba(0,0,0,0.6)] overflow-hidden z-[5000] flex flex-col max-h-[350px] animate-fade-in">
+                 <div className="px-4 py-3 border-b border-[rgba(8,164,167,0.3)] flex justify-between items-center relative z-10 bg-[rgba(3,15,38,0.4)]">
                    <span className="text-[#c3f5ff] text-[12px] font-bold tracking-widest">RECENT ALERTS</span>
                    <button className="text-[9px] text-[#8a96ad] hover:text-[#c3f5ff] transition-colors cursor-pointer" onClick={() => setAlerts([])}>CLEAR ALL</button>
                  </div>
-                 <div className="overflow-y-auto p-2 flex flex-col gap-1 custom-scrollbar">
+                 <div className="overflow-y-auto p-2 flex flex-col gap-1 custom-scrollbar relative z-10">
                    {alerts.length === 0 ? <div className="text-center p-6 text-[#5a6478] text-[10px]">No alerts</div> : 
                      alerts.slice(0, 8).map(a => (
-                       <div key={a.id} className="px-3 py-2 bg-[rgba(255,255,255,0.03)] hover:bg-[rgba(255,255,255,0.06)] rounded-lg text-[10px] text-[#dce4e5] cursor-pointer transition-colors border border-transparent hover:border-[rgba(59,73,76,0.5)]">
+                       <div key={a.id} className="px-3 py-2 bg-[rgba(255,255,255,0.03)] hover:bg-[rgba(255,255,255,0.06)] rounded-lg text-[10px] text-[#dce4e5] cursor-pointer transition-colors border border-transparent hover:border-[rgba(8,164,167,0.5)]">
                          <div className="font-bold mb-1" style={{ color: a.level === 'danger' ? '#ef4444' : a.level === 'warning' ? '#ffb800' : '#00daf3' }}>{a.time}</div>
                          <div className="leading-relaxed opacity-90">{a.message}</div>
                        </div>
@@ -474,18 +550,20 @@ export default function MaritimeDashboard() {
           
           {/* Profile */}
           <div className="relative flex items-center">
-            <button onClick={() => {setShowProfile(!showProfile); setShowSettings(false); setShowNotifications(false);}} className={`transition-colors cursor-pointer ${showProfile ? 'text-[#c3f5ff]' : 'text-[#bac9cc] hover:text-[#c3f5ff]'}`}>
+            <button onClick={() => {setShowProfile(!showProfile); setShowSettings(false); setShowNotifications(false);}} className={`transition-colors cursor-pointer icon-pop ${showProfile ? 'text-[#c3f5ff]' : 'text-[#bac9cc] hover:text-[#c3f5ff]'}`}>
               <svg viewBox="0 0 20 20" className="w-5 h-5"><path d={svgPaths.p3de21300} fill="currentColor" /></svg>
             </button>
             {showProfile && (
-              <div className="absolute top-[180%] right-[-10px] w-60 bg-[rgba(10,15,20,0.95)] backdrop-blur-xl border border-[rgba(59,73,76,0.6)] rounded-xl shadow-[0_15px_50px_rgba(0,0,0,0.6)] p-5 z-[5000] flex flex-col items-center animate-fade-in">
-                 <div className="w-16 h-16 bg-[#00e5ff] rounded-full overflow-hidden relative mb-4 border-2 border-[rgba(195,245,255,0.4)] shadow-[0_0_20px_rgba(0,229,255,0.2)]">
-                   <img src={imgAvatar} alt="" className="absolute h-full left-[-70%] top-0 w-[240%] max-w-none opacity-90 mix-blend-multiply" />
+              <div className="absolute top-[180%] right-[-10px] w-60 bg-gradient-aegis-rich grain-overlay glass-panel rounded-xl shadow-[0_15px_50px_rgba(0,0,0,0.6)] p-5 z-[5000] flex flex-col items-center animate-fade-in overflow-hidden">
+                 <div className="relative z-10 flex flex-col items-center w-full">
+                   <div className="w-16 h-16 bg-[#00e5ff] rounded-full overflow-hidden relative mb-4 border-2 border-[rgba(195,245,255,0.4)] shadow-[0_0_20px_rgba(0,229,255,0.2)] hover-lift">
+                     <img src={imgAvatar} alt="" className="absolute h-full left-[-70%] top-0 w-[240%] max-w-none opacity-90 mix-blend-multiply" />
+                   </div>
+                   <div className="text-[#c3f5ff] text-[15px] font-bold tracking-[0.06em] mb-1" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>ADMIRAL J.</div>
+                   <div className="text-[#00ff95] text-[10px] tracking-widest font-bold mb-5 bg-[rgba(0,255,149,0.1)] px-3 py-1 rounded-full border border-[rgba(0,255,149,0.2)]">CLEARANCE: LEVEL 7</div>
+                   <div className="w-full h-[1px] bg-[rgba(8,164,167,0.3)] mb-3" />
+                   <button onClick={() => { localStorage.removeItem('token'); localStorage.removeItem('role'); navigate('/login'); }} className="w-full py-2.5 bg-[rgba(239,68,68,0.1)] text-[10px] text-[#ef4444] border border-transparent hover:border-[rgba(239,68,68,0.5)] hover:bg-[rgba(239,68,68,0.2)] rounded-lg tracking-widest font-bold cursor-pointer transition-all">SECURE LOGOUT</button>
                  </div>
-                 <div className="text-[#c3f5ff] text-[15px] font-bold tracking-[0.06em] mb-1" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>ADMIRAL J.</div>
-                 <div className="text-[#00ff95] text-[10px] tracking-widest font-bold mb-5 bg-[rgba(0,255,149,0.1)] px-3 py-1 rounded-full border border-[rgba(0,255,149,0.2)]">CLEARANCE: LEVEL 7</div>
-                 <div className="w-full h-[1px] bg-[rgba(59,73,76,0.5)] mb-3" />
-                 <button onClick={() => { localStorage.removeItem('token'); localStorage.removeItem('role'); navigate('/login'); }} className="w-full py-2.5 bg-[rgba(239,68,68,0.1)] text-[10px] text-[#ef4444] border border-transparent hover:border-[rgba(239,68,68,0.5)] hover:bg-[rgba(239,68,68,0.2)] rounded-lg tracking-widest font-bold cursor-pointer transition-all">SECURE LOGOUT</button>
               </div>
             )}
           </div>
@@ -493,36 +571,49 @@ export default function MaritimeDashboard() {
       </header>
       {/* ── Weather Toggle Pill ── */}
       <div className={`absolute top-[72px] left-1/2 -translate-x-1/2 z-20 transition-all duration-300 ${activeNav === 'Weather' && activeTopTab === 'TACTICAL' ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}>
-        <div className="flex items-center bg-[rgba(10,14,26,0.85)] border border-[rgba(255,255,255,0.08)] rounded-full shadow-[0_8px_32px_rgba(0,0,0,0.4)] backdrop-blur-md p-1">
-          {['wind', 'clouds', 'storm', 'pressure'].map(mode => (
-            <button
-              key={mode}
-              onClick={() => setWeatherLayer(mode)}
-              className={`px-6 py-2 text-[10px] font-bold tracking-[0.15em] rounded-full transition-all ${weatherLayer === mode ? 'bg-[#304865] text-[#c3f5ff] shadow-inner' : 'text-[#8a96ad] hover:text-[#dce4e5] hover:bg-[rgba(255,255,255,0.04)]'}`}
-            >
-              {mode.toUpperCase()}
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          <div className="flex items-center bg-gradient-aegis-rich grain-overlay glass-panel rounded-full p-1 relative overflow-hidden">
+            <div className="relative z-10 flex">
+            {['wind', 'clouds', 'storm', 'pressure'].map(mode => (
+              <button
+                key={mode}
+                onClick={() => setWeatherLayer(mode)}
+                className={`px-6 py-2 text-[10px] font-bold tracking-[0.15em] rounded-full transition-all ${weatherLayer === mode ? 'bg-[#304865] text-[#c3f5ff] shadow-inner border border-[rgba(0,218,243,0.3)]' : 'text-[#8a96ad] hover:text-[#dce4e5] hover:bg-[rgba(255,255,255,0.04)]'}`}
+              >
+                {mode === 'clouds' ? 'PRECIPITATION' : mode.toUpperCase()}
+              </button>
+            ))}
+            </div>
+          </div>
+          <button 
+            onClick={() => setCloudsTileOn(!cloudsTileOn)} 
+            className={`flex items-center justify-center w-9 h-9 rounded-full bg-gradient-aegis-rich grain-overlay glass-panel transition-all relative overflow-hidden ${cloudsTileOn ? 'text-[#c3f5ff] border-[rgba(0,218,243,0.3)]' : 'text-[#8a96ad] hover:text-[#dce4e5]'}`}
+            title="Toggle Clouds Tile"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" className="relative z-10">
+              <path d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM19 18H6c-2.21 0-4-1.79-4-4s1.79-4 4-4h.71C7.37 7.69 9.48 6 12 6c3.04 0 5.5 2.46 5.5 5.5v.5H19c1.66 0 3 1.34 3 3s-1.34 3-3 3z"/>
+            </svg>
+          </button>
         </div>
       </div>
       
       {/* ── Weather Legends ── */}
       <div className={`absolute bottom-6 left-[80px] z-20 transition-all duration-300 ${activeNav === 'Weather' && activeTopTab === 'TACTICAL' ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}>
-        <div className="bg-[rgba(10,14,26,0.75)] border border-[rgba(255,255,255,0.12)] rounded-xl p-4 backdrop-blur-md text-[#dfe6f0] text-[11px] w-[260px] shadow-[0_8px_32px_rgba(0,0,0,0.4)]">
-          <div className="font-semibold mb-2 text-[#f2f5fa]">
-            {weatherLayer === 'wind' ? 'Wind (Bft)' : weatherLayer === 'clouds' ? 'Cloud Cover (%)' : weatherLayer === 'storm' ? 'Storm/Precipitation (mm/h)' : 'Pressure (hPa)'}
+        <div className="bg-gradient-aegis-rich grain-overlay glass-panel rounded-xl p-4 text-[#dfe6f0] text-[11px] w-[260px] relative">
+          <div className="font-semibold mb-2 text-[#f2f5fa] relative z-10">
+            {weatherLayer === 'wind' ? 'Wind (Bft)' : weatherLayer === 'clouds' ? 'Precipitation (mm/h)' : weatherLayer === 'storm' ? 'Storm/Precipitation (mm/h)' : 'Pressure (hPa)'}
           </div>
           <div className="w-full h-[9px] rounded-[5px] my-1.5" style={{
             background: weatherLayer === 'wind' ? 'linear-gradient(to right, rgb(35,70,170) 0%, rgb(35,150,185) 25%, rgb(70,185,120) 41.7%, rgb(190,215,80) 58.3%, rgb(230,180,60) 75%, rgb(230,120,50) 83.3%, rgb(210,70,50) 91.7%, rgb(150,30,40) 100%)' :
-                        weatherLayer === 'clouds' ? 'linear-gradient(to right, rgb(50,60,80) 0%, rgb(100,110,130) 25%, rgb(150,160,180) 50%, rgb(200,210,220) 75%, rgb(240,245,255) 100%)' :
+                        weatherLayer === 'clouds' ? 'linear-gradient(to right, rgb(10,30,50) 0%, rgb(100,150,250) 20%, rgb(50,100,220) 40%, rgb(20,50,180) 60%, rgb(150,50,150) 80%, rgb(255,0,0) 100%)' :
                         weatherLayer === 'storm' ? 'linear-gradient(to right, rgb(10,30,50) 0%, rgb(100,150,250) 20%, rgb(50,100,220) 40%, rgb(20,50,180) 60%, rgb(150,50,150) 80%, rgb(255,0,0) 100%)' :
                         'linear-gradient(to right, rgb(40,60,150) 0%, rgb(70,110,190) 20%, rgb(140,180,210) 40%, rgb(225,220,200) 60%, rgb(220,150,90) 80%, rgb(190,70,50) 100%)'
           }}></div>
-          <div className="flex justify-between text-[9px] text-[#93a0b6]">
+          <div className="flex justify-between text-[9px] text-[#93a0b6] relative z-10">
             {weatherLayer === 'wind' ? (
               <><span>0</span><span>3</span><span>5</span><span>7</span><span>9</span><span>10</span><span>11</span><span>12</span></>
             ) : weatherLayer === 'clouds' ? (
-              <><span>0</span><span>25</span><span>50</span><span>75</span><span>100</span></>
+              <><span>0</span><span>0.5</span><span>2</span><span>5</span><span>10</span><span>20+</span></>
             ) : weatherLayer === 'storm' ? (
               <><span>0</span><span>0.5</span><span>2</span><span>5</span><span>10</span><span>20+</span></>
             ) : (
@@ -775,19 +866,18 @@ export default function MaritimeDashboard() {
       )}
       
 {activeTopTab === 'TACTICAL' && (
-      <nav className="absolute top-1/2 -translate-y-1/2 left-4 bg-[rgba(8,15,17,0.75)] backdrop-blur-md border border-[rgba(59,73,76,0.5)] rounded-2xl flex flex-col items-center py-5 gap-3 z-20 shadow-[0_8px_32px_rgba(0,0,0,0.4)] w-[68px] pointer-events-auto">
+      <nav className="absolute top-1/2 -translate-y-1/2 left-4 bg-gradient-aegis-rich grain-overlay glass-panel rounded-2xl flex flex-col items-center py-5 gap-3 z-20 shadow-[0_8px_32px_rgba(0,0,0,0.5)] w-[68px] pointer-events-auto overflow-hidden">
 
-        
         {navItems.map(({ label, icon }) => (
           <button key={label} onClick={() => setActiveNav(activeNav === label ? null : label)} title={label}
-            className={`flex items-center justify-center w-11 h-11 rounded-xl transition-all cursor-pointer ${activeNav === label ? 'bg-[#304865] text-[#9eb7d9] shadow-inner border border-[rgba(158,183,217,0.3)]' : 'text-[#bac9cc] hover:text-[#c3f5ff] hover:bg-[rgba(255,255,255,0.06)]'}`}>
-            <span className={activeNav === label ? 'text-[#c3f5ff] scale-110 drop-shadow-[0_0_5px_rgba(195,245,255,0.5)]' : 'text-[#bac9cc]'}>{icon}</span>
+            className={`flex items-center justify-center w-11 h-11 rounded-xl transition-all cursor-pointer icon-pop ${activeNav === label ? 'bg-[rgba(0,218,243,0.15)] text-[#00daf3] shadow-[inset_0_0_15px_rgba(0,218,243,0.2)] border border-[rgba(0,218,243,0.3)]' : 'text-[#bac9cc] hover:text-[#c3f5ff] hover:bg-[rgba(255,255,255,0.06)]'}`}>
+            <span className={`z-10 relative ${activeNav === label ? 'text-[#00daf3] scale-110 drop-shadow-[0_0_8px_rgba(0,218,243,0.6)]' : 'text-[#bac9cc]'}`}>{icon}</span>
           </button>
         ))}
 
-        <div className="w-10 h-[1px] bg-[rgba(59,73,76,0.6)] my-3" />
+        <div className="w-10 h-[1px] bg-[rgba(8,164,167,0.3)] my-3 z-10 relative" />
         <button onClick={() => setDemoMode(d => !d)} title="Demo Mode"
-          className={`w-11 h-11 flex items-center justify-center rounded-xl transition-all cursor-pointer border ${demoMode ? 'bg-[rgba(124,58,237,0.2)] border-[#7c3aed] text-[#a78bfa] shadow-[0_0_20px_rgba(124,58,237,0.4)]' : 'border-transparent text-[#bac9cc] hover:bg-[rgba(255,255,255,0.06)] hover:text-[#c3f5ff]'}`}>
+          className={`w-11 h-11 flex items-center justify-center rounded-xl transition-all cursor-pointer border icon-pop z-10 relative ${demoMode ? 'bg-[rgba(124,58,237,0.2)] border-[#7c3aed] text-[#a78bfa] shadow-[0_0_20px_rgba(124,58,237,0.4)]' : 'border-transparent text-[#bac9cc] hover:bg-[rgba(255,255,255,0.06)] hover:text-[#c3f5ff]'}`}>
           {demoMode ? '◉' : '○'}
         </button>
       </nav>
@@ -819,45 +909,108 @@ export default function MaritimeDashboard() {
         {activeNav === 'Fleet' && (
           <>
             {/* Active Fleet */}
-            <div className="pointer-events-auto backdrop-blur-md bg-[rgba(20,28,31,0.75)] rounded-2xl border border-[rgba(59,73,76,0.5)] overflow-hidden flex flex-col max-h-[50%] shadow-[0_8px_32px_rgba(0,0,0,0.4)] animate-fade-in">
-              <div className="bg-[rgba(30,40,45,0.8)] border-b border-[rgba(59,73,76,0.5)] flex items-center justify-between px-5 py-3.5 shrink-0">
+            <div className="pointer-events-auto bg-gradient-aegis-rich grain-overlay glass-panel rounded-2xl overflow-hidden flex flex-col max-h-[50%] animate-fade-in relative">
+              <div className="bg-[rgba(3,15,38,0.4)] border-b border-[rgba(8,164,167,0.3)] flex items-center justify-between px-5 py-3.5 shrink-0 relative z-10">
                 <span className="text-[#c3f5ff] text-[15px] font-bold tracking-[0.02em]" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>ACTIVE FLEET</span>
                 <span className="bg-[rgba(195,245,255,0.15)] text-[#c3f5ff] text-[10px] font-bold tracking-[0.08em] px-2.5 py-1 rounded">
                   {String(boats.filter(b => b.status !== 'OFFLINE').length).padStart(2, '0')} UNITS
                 </span>
               </div>
-              <div className="p-3 flex-1 overflow-y-auto flex flex-col gap-2.5 custom-scrollbar">
+              <div className="p-3 flex-1 overflow-y-auto flex flex-col gap-2.5 custom-scrollbar relative z-10">
                  <div className="relative mb-1">
                     <input value={vesselId} onChange={e => setVesselId(e.target.value)}
                       placeholder="SEARCH ID..."
                       className="w-full bg-[rgba(10,14,26,0.6)] border border-[rgba(255,255,255,0.08)] rounded-lg px-4 py-2 text-[11px] text-[#dce4e5] outline-none focus:border-[rgba(0,218,243,0.5)] transition-colors" />
                  </div>
-                 {filteredBoats.length === 0 && <div className="text-[#5a6478] text-[11px] text-center mt-4">No vessels found</div>}
-                 {filteredBoats.map(b => (
-                    <button key={b.boatId} onClick={() => {setSelectedBoat(b); setSelectedBoatId(b.boatId);}}
-                      className={`w-full text-left rounded-lg border transition-all cursor-pointer ${selectedBoatId === b.boatId ? 'bg-[rgba(0,218,243,0.12)] border-[rgba(0,218,243,0.4)] shadow-[inset_0_0_15px_rgba(0,218,243,0.1)]' : 'bg-[rgba(10,15,20,0.5)] border-[rgba(59,73,76,0.4)] hover:border-[rgba(195,245,255,0.3)] hover:bg-[rgba(25,35,40,0.6)]'}`}>
-                      <div className="flex items-center gap-3.5 p-3">
-                        <div className="w-1.5 h-8 rounded-full shrink-0" style={{ background: statusColor(b.status) }} />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between">
-                            <span className="text-[#dce4e5] text-[12px] font-bold tracking-widest truncate">{b.boatId}</span>
-                            <span className="text-[9px] shrink-0 font-semibold tracking-wider" style={{ color: statusColor(b.status) }}>{b.status}</span>
-                          </div>
-                          <div className="text-[#8a96ad] text-[10px] mt-1 truncate">{b.type} | {b.group}</div>
-                        </div>
-                      </div>
-                    </button>
-                 ))}
+
+                 {/* Demo-mode fleet grid — replaces the regular vessel
+                     cards while demo mode is active. Two-column grid
+                     of zone-coloured chips, each clickable to select
+                     the boat. Demo boats don't carry status/type/group
+                     fields, so the regular card layout would render
+                     empty anyway. */}
+                 {demoMode ? (
+                   <div className="grid grid-cols-2 gap-2">
+                     {boats.length === 0 && (
+                       <div className="col-span-2 text-[#5a6478] text-[11px] text-center mt-4">
+                         NO VESSELS
+                       </div>
+                     )}
+                     {boats.map((b) => {
+                       const isSelected = selectedBoatId === b.boatId;
+                       const color = zoneColor(b.zone);
+                       const bg = zoneBg(b.zone);
+                       const isAlert = b.zone === 'WARNING' || b.zone === 'DANGER' || b.zone === 'ALERT';
+                       return (
+                         <button
+                           key={b.boatId}
+                           onClick={() => {
+                             setSelectedBoatId(b.boatId);
+                             setSelectedBoat(b);
+                           }}
+                           title={`${b.boatId} — ${b.zone}`}
+                           className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-left cursor-pointer transition-all glass-panel relative overflow-hidden ${
+                             isSelected
+                               ? 'shadow-[0_0_14px_rgba(56,189,248,0.4)] scale-[1.02]'
+                               : 'opacity-90 hover:opacity-100 hover:scale-[1.01]'
+                           }`}
+                           style={{
+                             borderColor: isSelected ? color : `${color}80`,
+                             color: '#dce4e5',
+                             background: isSelected
+                               ? `linear-gradient(135deg, ${bg}, ${bg.replace('0.3', '0.45').replace('0.4', '0.55')})`
+                               : bg,
+                             borderWidth: isSelected ? '1.5px' : '1px',
+                           }}
+                         >
+                           <span
+                             className={`w-2 h-2 rounded-full shrink-0 ${
+                               isAlert ? 'animate-pulse' : ''
+                             }`}
+                             style={{ background: color, boxShadow: `0 0 8px ${color}` }}
+                           />
+                           <div className="flex-1 min-w-0">
+                             <div className="text-[#c3f5ff] text-[11px] font-bold tracking-widest truncate">
+                               {b.boatId}
+                             </div>
+                             <div className="text-[10px] tracking-wider truncate" style={{ color }}>
+                               {b.zone}
+                             </div>
+                           </div>
+                         </button>
+                       );
+                     })}
+                   </div>
+                 ) : (
+                   <>
+                     {filteredBoats.length === 0 && <div className="text-[#5a6478] text-[11px] text-center mt-4">No vessels found</div>}
+                     {filteredBoats.map(b => (
+                       <button key={b.boatId} onClick={() => {setSelectedBoat(b); setSelectedBoatId(b.boatId);}}
+                         className={`w-full text-left rounded-lg border transition-all cursor-pointer glass-panel relative overflow-hidden ${selectedBoatId === b.boatId ? 'bg-[rgba(0,218,243,0.12)] border-[rgba(0,218,243,0.4)] shadow-[inset_0_0_15px_rgba(0,218,243,0.1)]' : 'bg-[rgba(10,15,20,0.5)] border-[rgba(59,73,76,0.4)] hover:border-[rgba(195,245,255,0.3)] hover:bg-[rgba(25,35,40,0.6)]'}`}>
+                         <div className="flex items-center gap-3.5 p-3">
+                           <div className="w-1.5 h-8 rounded-full shrink-0" style={{ background: statusColor(b.status) }} />
+                           <div className="flex-1 min-w-0">
+                             <div className="flex items-center justify-between">
+                               <span className="text-[#dce4e5] text-[12px] font-bold tracking-widest truncate">{b.boatId}</span>
+                               <span className="text-[9px] shrink-0 font-semibold tracking-wider" style={{ color: statusColor(b.status) }}>{b.status}</span>
+                             </div>
+                             <div className="text-[#8a96ad] text-[10px] mt-1 truncate">{b.type} | {b.group}</div>
+                           </div>
+                         </div>
+                       </button>
+                     ))}
+                   </>
+                 )}
               </div>
             </div>
 
             {/* Telemetry */}
-            <div className="pointer-events-auto backdrop-blur-md bg-[rgba(20,28,31,0.75)] rounded-2xl border border-[rgba(59,73,76,0.5)] p-5 shadow-[0_8px_32px_rgba(0,0,0,0.4)] shrink-0 relative overflow-hidden animate-fade-in">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-[rgba(0,218,243,0.05)] rounded-bl-full pointer-events-none" />
-              <div className="text-[#00daf3] text-[11px] font-bold tracking-widest mb-4 border-b border-[rgba(59,73,76,0.4)] pb-2.5">
+            <div className="pointer-events-auto bg-gradient-aegis-rich grain-overlay glass-panel rounded-2xl p-5 shrink-0 relative overflow-hidden animate-fade-in">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-[rgba(0,218,243,0.05)] rounded-bl-full pointer-events-none z-10" />
+              <div className="text-[#00daf3] text-[11px] font-bold tracking-widest mb-4 border-b border-[rgba(8,164,167,0.3)] pb-2.5 relative z-10">
                 TELEMETRY — {selectedBoat?.boatId ?? 'NO VESSEL'}
               </div>
-              <div className="flex flex-col gap-3 text-[11px]">
+              <div className="flex flex-col gap-3 text-[11px] relative z-10">
                 <div className="flex justify-between items-center">
                   <span className="text-[#8a96ad]">LOCATION</span>
                   <span className="text-[#c3f5ff] font-medium">{currentLocation.lat.toFixed(3)}°N {currentLocation.lon.toFixed(3)}°E</span>
@@ -884,9 +1037,9 @@ export default function MaritimeDashboard() {
             </div>
 
             {/* Environmental */}
-            <div className="pointer-events-auto backdrop-blur-md bg-[rgba(20,28,31,0.75)] rounded-2xl border border-[rgba(59,73,76,0.5)] p-4 shadow-[0_8px_32px_rgba(0,0,0,0.4)] shrink-0 animate-fade-in">
-                <div className="text-[#c3f5ff] text-[11px] font-bold tracking-widest mb-3">ENVIRONMENTAL</div>
-                <div className="grid grid-cols-2 gap-3">
+            <div className="pointer-events-auto bg-gradient-aegis-rich grain-overlay glass-panel rounded-2xl p-4 shrink-0 relative animate-fade-in">
+                <div className="text-[#c3f5ff] text-[11px] font-bold tracking-widest mb-3 relative z-10">ENVIRONMENTAL</div>
+                <div className="grid grid-cols-2 gap-3 relative z-10">
                   <div className="bg-[rgba(10,15,20,0.5)] border border-[rgba(59,73,76,0.4)] rounded-xl p-3 shadow-inner">
                     <div className="flex items-center gap-2 mb-1.5">
                       <svg viewBox="0 0 11.67 9.92" className="w-3 h-3 text-[#00daf3] shrink-0"><path d={svgPaths.p33fbcd00} fill="currentColor" /></svg>
@@ -912,10 +1065,10 @@ export default function MaritimeDashboard() {
 
         {/* ── Sensors Panel ── */}
         {activeNav === 'Sensors' && (
-          <div className="pointer-events-auto backdrop-blur-md bg-[rgba(20,28,31,0.75)] rounded-2xl border border-[rgba(59,73,76,0.5)] p-6 shadow-[0_8px_32px_rgba(0,0,0,0.4)] flex-1 min-h-0 flex flex-col animate-fade-in">
-            <div className="text-[#c3f5ff] text-[15px] font-bold tracking-[0.02em] mb-6 border-b border-[rgba(59,73,76,0.5)] pb-4" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>SENSOR ARRAYS</div>
-            <div className="flex-1 flex flex-col gap-5 overflow-y-auto custom-scrollbar pr-2">
-              <div className="bg-[rgba(10,15,20,0.5)] border border-[rgba(0,218,243,0.3)] rounded-xl p-5 shadow-[inset_0_0_20px_rgba(0,218,243,0.1)]">
+          <div className="pointer-events-auto bg-gradient-aegis-rich grain-overlay glass-panel rounded-2xl p-6 flex-1 min-h-0 flex flex-col animate-fade-in relative">
+            <div className="text-[#c3f5ff] text-[15px] font-bold tracking-[0.02em] mb-6 border-b border-[rgba(8,164,167,0.3)] pb-4 relative z-10" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>SENSOR ARRAYS</div>
+            <div className="flex-1 flex flex-col gap-5 overflow-y-auto custom-scrollbar pr-2 relative z-10">
+              <div className="bg-[rgba(3,15,38,0.4)] border border-[rgba(0,218,243,0.3)] rounded-xl p-5 shadow-[inset_0_0_20px_rgba(0,218,243,0.1)]">
                  <div className="flex justify-between items-center mb-4">
                    <div className="text-[#00daf3] text-[12px] font-bold tracking-widest">RADAR NETWORK</div>
                    <div className="w-2 h-2 rounded-full bg-[#00ff95] animate-pulse" />
@@ -951,20 +1104,32 @@ export default function MaritimeDashboard() {
                  </div>
               </div>
             </div>
-            <div className="pointer-events-auto backdrop-blur-md bg-[rgba(20,28,31,0.75)] rounded-2xl border border-[rgba(59,73,76,0.5)] p-4 shrink-0 shadow-none border-t border-[rgba(59,73,76,0.5)] rounded-none">
+            <div className="pointer-events-auto bg-[rgba(3,15,38,0.4)] border-t border-[rgba(8,164,167,0.3)] p-4 shrink-0 mt-4 rounded-b-2xl relative z-10">
           <div className="flex items-center justify-between mb-3.5">
             <span className="text-[#00daf3] text-[10px] font-bold tracking-[0.1em]">SYSTEM STABILITY</span>
             <span className="text-[#00ff95] text-[11px] font-bold">{systemStability.toFixed(1)}%</span>
           </div>
           <div className="flex items-center gap-4 mb-3 text-[10px]">
+            {/* LED + BUZZER mirror the SELECTED boat's zone so the
+                Threats panel reads the same boundary state as the
+                map. Selecting a different boat swaps the values. */}
             <div className="flex items-center gap-2">
               <span className="text-[#8a96ad] font-bold tracking-widest">LED</span>
-              <span className="font-bold" style={{ color: isConnected ? '#00ff95' : '#ef4444' }}>{isConnected ? 'ONLINE' : 'OFFLINE'}</span>
+              <span className="font-bold" style={{ color: zoneColor(currentZone) }}>
+                {currentZone === 'SAFE' ? 'IDLE' : currentZone === 'ALERT' ? 'CAUTION' : currentZone === 'WARNING' ? 'ADVISE' : 'ALARM'}
+              </span>
             </div>
             <div className="w-[1px] h-3 bg-[rgba(59,73,76,0.6)]" />
             <div className="flex items-center gap-2">
               <span className="text-[#8a96ad] font-bold tracking-widest">BUZZER</span>
-              <span className="font-bold" style={{ color: currentZone === 'DANGER' ? '#ef4444' : '#bac9cc' }}>{currentZone === 'DANGER' ? 'ACTIVE' : 'STANDBY'}</span>
+              <span className="font-bold" style={{ color: (currentZone === 'DANGER' || currentZone === 'WARNING') ? zoneColor(currentZone) : '#bac9cc' }}>
+                {currentZone === 'DANGER' ? 'ACTIVE — FAST' : currentZone === 'WARNING' ? 'ACTIVE — SLOW' : 'STANDBY'}
+              </span>
+            </div>
+            <div className="w-[1px] h-3 bg-[rgba(59,73,76,0.6)]" />
+            <div className="flex items-center gap-1.5">
+              <span className="text-[#8a96ad] font-bold tracking-widest">VESSEL</span>
+              <span className="text-[#c3f5ff] font-bold tracking-wider">{selectedBoat?.boatId ?? '—'}</span>
             </div>
           </div>
           <div className="bg-[rgba(2,8,23,0.6)] h-1.5 rounded-full overflow-hidden shadow-inner">
@@ -976,15 +1141,15 @@ export default function MaritimeDashboard() {
 
     {/* ── Threats Panel (Vessels By Zone) ── */}
         {activeNav === 'Threats' && (
-          <div className="pointer-events-auto backdrop-blur-md bg-[rgba(20,28,31,0.75)] rounded-2xl border border-[rgba(59,73,76,0.5)] overflow-hidden flex flex-col shadow-[0_8px_32px_rgba(0,0,0,0.4)] animate-fade-in relative my-auto min-h-[420px]">
-            <div className="bg-[rgba(30,40,45,0.8)] border-b border-[rgba(59,73,76,0.5)] flex items-center justify-between px-5 py-3.5 shrink-0">
+          <div className="pointer-events-auto bg-gradient-aegis-rich grain-overlay glass-panel rounded-2xl overflow-hidden flex flex-col animate-fade-in relative my-auto min-h-[420px]">
+            <div className="bg-[rgba(3,15,38,0.4)] border-b border-[rgba(8,164,167,0.3)] flex items-center justify-between px-5 py-3.5 shrink-0 relative z-10">
               <span className="text-[#c3f5ff] text-[15px] font-bold tracking-[0.02em]" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>VESSELS BY ZONE</span>
               <span className="bg-[rgba(195,245,255,0.15)] text-[#c3f5ff] text-[10px] font-bold tracking-[0.08em] px-2.5 py-1 rounded">
                 {boats.length} UNITS
               </span>
             </div>
              
-             <div className="flex flex-col justify-center gap-4 p-5 flex-1">
+             <div className="flex flex-col justify-center gap-4 p-5 flex-1 relative z-10">
                {/* SAFE Card */}
                <div className="bg-[rgba(10,15,20,0.5)] border border-[rgba(0,255,149,0.3)] rounded-xl p-4 flex items-center justify-between shadow-[inset_0_0_20px_rgba(0,255,149,0.05)]">
                  <div className="flex items-center gap-4">
@@ -1039,12 +1204,12 @@ export default function MaritimeDashboard() {
 
         {/* ── Logs Panel ── */}
         {activeNav === 'Live Feed' && (
-          <div className="pointer-events-auto backdrop-blur-md bg-[rgba(20,28,31,0.75)] rounded-2xl border border-[rgba(59,73,76,0.5)] overflow-hidden flex flex-col flex-1 min-h-[400px] shadow-[0_8px_32px_rgba(0,0,0,0.4)] animate-fade-in">
-            <div className="bg-[rgba(30,40,45,0.8)] border-b border-[rgba(59,73,76,0.5)] flex items-center justify-between px-5 py-3.5 shrink-0">
+          <div className="pointer-events-auto bg-gradient-aegis-rich grain-overlay glass-panel rounded-2xl overflow-hidden flex flex-col flex-1 min-h-[400px] animate-fade-in relative">
+            <div className="bg-[rgba(3,15,38,0.4)] border-b border-[rgba(8,164,167,0.3)] flex items-center justify-between px-5 py-3.5 shrink-0 relative z-10">
               <span className="text-[#c3f5ff] text-[15px] font-bold tracking-[0.02em]" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>TACTICAL LOG</span>
               <svg viewBox="0 0 10.5 10.5" className="w-3.5 h-3.5 text-[#8a96ad]"><path d={svgPaths.p1c1607c0} fill="currentColor" /></svg>
             </div>
-            <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-4 min-h-0 custom-scrollbar">
+            <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-4 min-h-0 custom-scrollbar relative z-10">
               {alerts.length === 0 && <div className="text-[#5a6478] text-[11px] text-center py-4">No recent events</div>}
               {alerts.map((a, i) => (
                 <div key={a.id} className={`relative pl-4 py-1 transition-opacity ${i >= 5 ? 'opacity-40' : ''}`}>
@@ -1064,27 +1229,36 @@ export default function MaritimeDashboard() {
 
       {/* ── Placeholders for Other Tabs ── */}
       {activeTopTab === 'STRATEGIC' && (
-        <div className="absolute inset-0 z-[5] flex items-center justify-center animate-fade-in pointer-events-none">
-           <div className="text-[#c3f5ff] text-[24px] font-bold tracking-[0.2em] opacity-30" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>STRATEGIC COMMAND OFFLINE</div>
+        <div className="absolute inset-0 z-[5] pt-[80px] pb-6 px-6 pointer-events-auto flex items-center justify-center animate-fade-in">
+           <div className="w-full max-w-3xl py-20 bg-gradient-aegis-rich grain-overlay glass-panel rounded-2xl flex flex-col items-center justify-center shadow-[0_20px_60px_rgba(0,0,0,0.8)] border border-[rgba(8,164,167,0.3)]">
+             <div className="text-[#c3f5ff] text-[24px] font-bold tracking-[0.2em] opacity-80 relative z-10" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>STRATEGIC COMMAND OFFLINE</div>
+             <div className="text-[#00daf3] text-[12px] tracking-[0.1em] mt-4 opacity-70 relative z-10">AWAITING AUTHORIZATION...</div>
+           </div>
         </div>
       )}
       {activeTopTab === 'LOGISTICS' && (
-        <div className="absolute inset-0 z-[5] flex items-center justify-center animate-fade-in pointer-events-none">
-           <div className="text-[#c3f5ff] text-[24px] font-bold tracking-[0.2em] opacity-30" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>LOGISTICS NETWORK STANDBY</div>
+        <div className="absolute inset-0 z-[5] pt-[80px] pb-6 px-6 pointer-events-auto flex items-center justify-center animate-fade-in">
+           <div className="w-full max-w-3xl py-20 bg-gradient-aegis-rich grain-overlay glass-panel rounded-2xl flex flex-col items-center justify-center shadow-[0_20px_60px_rgba(0,0,0,0.8)] border border-[rgba(8,164,167,0.3)]">
+             <div className="text-[#c3f5ff] text-[24px] font-bold tracking-[0.2em] opacity-80 relative z-10" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>LOGISTICS NETWORK STANDBY</div>
+             <div className="text-[#00daf3] text-[12px] tracking-[0.1em] mt-4 opacity-70 relative z-10">INITIALIZING SUPPLY ROUTES...</div>
+           </div>
         </div>
       )}
       {activeTopTab === 'COMMS' && (
-        <div className="absolute inset-0 z-[5] flex items-center justify-center animate-fade-in pointer-events-none">
-           <div className="text-[#c3f5ff] text-[24px] font-bold tracking-[0.2em] opacity-30" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>COMMS RELAY SECURE</div>
+        <div className="absolute inset-0 z-[5] pt-[80px] pb-6 px-6 pointer-events-auto flex items-center justify-center animate-fade-in">
+           <div className="w-full max-w-3xl py-20 bg-gradient-aegis-rich grain-overlay glass-panel rounded-2xl flex flex-col items-center justify-center shadow-[0_20px_60px_rgba(0,0,0,0.8)] border border-[rgba(8,164,167,0.3)]">
+             <div className="text-[#c3f5ff] text-[24px] font-bold tracking-[0.2em] opacity-80 relative z-10" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>COMMS RELAY SECURE</div>
+             <div className="text-[#00daf3] text-[12px] tracking-[0.1em] mt-4 opacity-70 relative z-10">ENCRYPTION ACTIVE...</div>
+           </div>
         </div>
       )}
 
       {/* ── DETAILED LOGS ── */}
       {activeTopTab === 'DETAILED LOGS' && (
-        <div className="absolute inset-0 z-[15] pt-[80px] pb-6 px-6 pointer-events-auto flex items-center justify-center bg-[rgba(2,8,23,0.85)] backdrop-blur-md animate-fade-in">
-          <div className="w-full h-full max-w-6xl max-h-[800px] hud-panel flex flex-col overflow-hidden shadow-[0_20px_60px_rgba(0,0,0,0.8)] relative">
+        <div className="absolute inset-0 z-[15] pt-[80px] pb-12 px-6 pointer-events-auto flex items-center justify-center bg-[rgba(2,8,23,0.85)] backdrop-blur-md animate-fade-in">
+          <div className="w-full h-full max-w-6xl max-h-[800px] bg-gradient-aegis-rich grain-overlay glass-panel rounded-2xl flex flex-col overflow-hidden shadow-[0_20px_60px_rgba(0,0,0,0.8)] relative">
             {/* Header */}
-            <div className="px-6 py-4 border-b border-[rgba(0,218,243,0.3)] bg-[rgba(10,14,26,0.6)] flex items-center justify-between shrink-0">
+            <div className="px-6 py-4 border-b border-[rgba(8,164,167,0.3)] bg-[rgba(3,15,38,0.4)] flex items-center justify-between shrink-0 relative z-10">
               <div>
                 <h1 className="text-[18px] font-bold text-[#c3f5ff] tracking-[0.1em]" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>DETAILED LOGS</h1>
                 <p className="text-[10px] text-[#8a96ad] tracking-widest mt-1">HISTORICAL MOVEMENT & ZONE INCIDENTS</p>
@@ -1103,7 +1277,7 @@ export default function MaritimeDashboard() {
             </div>
             
             {/* Tabs */}
-            <div className="flex gap-1 border-b border-[rgba(59,73,76,0.3)] bg-[rgba(10,14,26,0.4)] px-6">
+            <div className="flex gap-1 border-b border-[rgba(8,164,167,0.3)] bg-[rgba(3,15,38,0.2)] px-6 relative z-10">
               {[ {id: 'movement', label: 'MOVEMENT HISTORY', count: historyMovements.length}, {id: 'zone', label: 'ZONE INCIDENTS', count: historyZoneEvents.length} ].map(tab => (
                 <button key={tab.id} onClick={() => setLogsActiveTab(tab.id)} className={`flex items-center gap-2 px-4 py-3 text-[11px] font-bold tracking-widest transition-all border-b-2 -mb-[1px] ${logsActiveTab === tab.id ? 'border-[#00daf3] text-[#00daf3] bg-[rgba(0,218,243,0.05)]' : 'border-transparent text-[#8a96ad] hover:text-[#dce4e5]'}`}>
                   {tab.label}
@@ -1112,8 +1286,9 @@ export default function MaritimeDashboard() {
               ))}
             </div>
             
+            
             {/* Table Area */}
-            <div className="flex-1 overflow-y-auto custom-scrollbar relative bg-[rgba(5,10,15,0.4)]">
+            <div className="flex-1 overflow-y-auto custom-scrollbar relative bg-[rgba(3,15,38,0.2)] z-10">
               {logsError && (
                 <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-[rgba(239,68,68,0.1)] border border-[#ef4444] text-[#ef4444] text-[10px] font-bold tracking-widest px-4 py-1.5 rounded z-10 flex items-center gap-2">
                   <span className="animate-pulse">⚠</span> {logsError}
@@ -1121,7 +1296,7 @@ export default function MaritimeDashboard() {
               )}
               
               <table className="w-full text-left border-collapse">
-                <thead className="sticky top-0 bg-[rgba(10,15,22,0.95)] backdrop-blur-md z-10 shadow-md">
+                <thead className="sticky top-0 bg-[rgba(6,25,48,0.95)] backdrop-blur-md z-10 shadow-md">
                   <tr>
                     <th className="px-6 py-3 text-[10px] font-bold text-[#8a96ad] tracking-widest border-b border-[rgba(59,73,76,0.5)]">ID</th>
                     {logsActiveTab === 'movement' && <th className="px-6 py-3 text-[10px] font-bold text-[#8a96ad] tracking-widest border-b border-[rgba(59,73,76,0.5)]">LATITUDE</th>}
@@ -1166,77 +1341,149 @@ export default function MaritimeDashboard() {
       )}
       
 {activeTopTab === 'TACTICAL' && (
-      <footer className="absolute bottom-4 left-1/2 -translate-x-1/2 h-[42px] bg-[rgba(8,15,17,0.85)] backdrop-blur-md border border-[rgba(59,73,76,0.6)] rounded-full px-8 flex items-center gap-6 text-[10px] text-[#8a96ad] z-20 shadow-[0_8px_32px_rgba(0,0,0,0.4)] pointer-events-auto">
-        <span className="text-[#c3f5ff] font-bold tracking-[0.1em]">AEGIS COMMAND V4.2</span>
-        <span className="text-[rgba(59,73,76,0.4)]">|</span>
-        <span className="text-[#00ff95] font-semibold tracking-widest">● SYSTEM STABLE</span>
-        <span className="text-[rgba(59,73,76,0.4)]">|</span>
+      <footer className="absolute bottom-6 left-1/2 -translate-x-1/2 h-[44px] rounded-full bg-gradient-aegis-rich grain-overlay glass-panel border border-[rgba(8,164,167,0.3)] px-6 flex items-center gap-4 text-[10px] text-[#a8b8c4] z-20 shadow-[0_-8px_32px_rgba(0,0,0,0.5)] pointer-events-auto overflow-hidden whitespace-nowrap">
+        <span className="text-[#c3f5ff] font-bold tracking-[0.1em] shrink-0 z-10 relative">AEGIS COMMAND V4.2</span>
+        <span className="text-[rgba(59,73,76,0.4)] shrink-0 z-10 relative">|</span>
+        <span className="text-[#00ff95] font-semibold tracking-widest shrink-0 z-10 relative">● SYSTEM STABLE</span>
+        <span className="text-[rgba(59,73,76,0.4)] shrink-0 z-10 relative">|</span>
         
         {/* Indicators */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 shrink-0 z-10 relative">
           <div className="flex items-center gap-1.5">
             <span className="text-[10px] tracking-widest font-bold">LED</span>
-            <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-[#00ff95] shadow-[0_0_8px_#00ff95]' : 'bg-[#ef4444] shadow-[0_0_8px_#ef4444]'}`} />
+            <div
+              className="w-2 h-2 rounded-full"
+              style={{
+                background: zoneColor(currentZone),
+                boxShadow: `0 0 8px ${zoneColor(currentZone)}`,
+              }}
+            />
           </div>
           <div className="flex items-center gap-1.5">
             <span className="text-[10px] tracking-widest font-bold">BUZZER</span>
-            <div className={`w-2 h-2 rounded-full ${currentZone === 'DANGER' ? 'bg-[#ef4444] shadow-[0_0_8px_#ef4444] animate-pulse' : 'bg-[rgba(255,255,255,0.2)]'}`} />
+            <div
+              className={`w-2 h-2 rounded-full ${
+                currentZone === 'WARNING' || currentZone === 'DANGER' ? 'animate-pulse' : ''
+              }`}
+              style={{
+                background:
+                  currentZone === 'WARNING' || currentZone === 'DANGER'
+                    ? zoneColor(currentZone)
+                    : 'rgba(255,255,255,0.2)',
+                boxShadow:
+                  currentZone === 'WARNING' || currentZone === 'DANGER'
+                    ? `0 0 8px ${zoneColor(currentZone)}`
+                    : 'none',
+                animationDuration:
+                  currentZone === 'DANGER' ? '0.4s' : '1.2s',
+              }}
+            />
           </div>
+          <span className="text-[10px] tracking-widest text-[#8a96ad] ml-2">
+            VESSEL: <span className="text-[#c3f5ff] font-bold">{selectedBoat?.boatId ?? '—'}</span>
+          </span>
         </div>
-        <span className="text-[rgba(59,73,76,0.4)]">|</span>
         
-        <span className="tracking-widest">UPTIME: {lastUpdate}</span>
-        <span className="text-[rgba(59,73,76,0.4)]">|</span>
-        <span className="text-[#00daf3] font-semibold tracking-widest cursor-pointer hover:text-white transition-colors">LIVE FEEDS</span>
+        <div className="flex-1 flex justify-center pointer-events-none z-10 relative"></div>
+        
+        <span className="text-[rgba(59,73,76,0.4)] shrink-0 z-10 relative">|</span>
+        <span className="tracking-widest shrink-0 z-10 relative">UPTIME: {lastUpdate}</span>
+        <span className="text-[rgba(59,73,76,0.4)] shrink-0 z-10 relative">|</span>
+        <span className="text-[#00daf3] font-semibold tracking-widest cursor-pointer hover:text-white transition-colors icon-pop shrink-0 z-10 relative">LIVE FEEDS</span>
       </footer>
       )}
 
-      {/* ── Toast Notifications ── */}
-      <div className="fixed top-4 right-4 z-[3000] flex flex-col gap-2 pointer-events-none">
-        {toasts.map(t => (
-          <div key={t.id} className="animate-slide-in bg-[rgba(10,14,26,0.92)] border rounded-xl px-5 py-4 text-[12px] backdrop-blur-md pointer-events-auto shadow-2xl"
-            style={{ borderColor: zoneColor(t.zone), color: zoneColor(t.zone) }}>
-            <span className="font-bold mr-2 text-[14px]">⚡ ZONE CHANGE</span>
-            <div className="mt-1 text-[#dce4e5] opacity-90">{t.message}</div>
-          </div>
-        ))}
+
+
+      {/* ── Right-side push notifications (WARNING line alerts) ──
+          Fires whenever any boat (real backend OR demo fleet) crosses
+          into the WARNING (or DANGER) zone. Stacks at the top-right
+          corner, newest at the bottom, up to 4 visible at once. */}
+      <div className="fixed top-20 right-4 z-[3000] flex flex-col-reverse gap-2 pointer-events-none w-[340px]">
+        {toasts.slice(-4).map(t => {
+          const color = zoneColor(t.zone);
+          const bg = zoneBg(t.zone);
+          const icon = t.zone === 'DANGER' ? '⚠' : '⚡';
+          return (
+            <div
+              key={t.id}
+              className="pointer-events-auto rounded-xl overflow-hidden border shadow-[0_18px_40px_rgba(0,0,0,0.55)] backdrop-blur-md animate-slide-in"
+              style={{
+                background: 'linear-gradient(180deg, rgba(10,16,28,0.95), rgba(6,12,22,0.92))',
+                borderColor: `${color}80`,
+              }}
+            >
+              {/* Coloured top accent line */}
+              <div
+                className="h-[3px] w-full"
+                style={{ background: `linear-gradient(90deg, ${color}, ${color}55)` }}
+              />
+              <div className="px-4 py-3 flex gap-3 items-start">
+                <div
+                  className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 text-[16px] font-bold"
+                  style={{ background: bg, color, boxShadow: `0 0 14px ${color}55` }}
+                >
+                  {icon}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2 mb-0.5">
+                    <span className="text-[10px] tracking-widest text-[#8a96ad] font-bold uppercase">
+                      AEGIS · BOUNDARY ALERT
+                    </span>
+                    <button
+                      onClick={() => setToasts(prev => prev.filter(x => x.id !== t.id))}
+                      className="text-[#5a6478] hover:text-[#c3f5ff] text-[14px] leading-none cursor-pointer transition-colors"
+                      aria-label="Dismiss"
+                      title="Dismiss"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div
+                    className="text-[13px] font-bold tracking-wide leading-tight"
+                    style={{ color }}
+                  >
+                    {t.title}
+                  </div>
+                  <div className="text-[11px] text-[#dce4e5] mt-1 leading-snug opacity-90">
+                    {t.body}
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
       </div>
 
-      {/* ── Danger Modal ── */}
-      {showDangerModal && (
-        <div className="fixed inset-0 z-[3200] bg-[rgba(0,0,0,0.85)] flex items-center justify-center animate-fade-in backdrop-blur-md pointer-events-auto">
-          <div className="bg-[rgba(10,15,20,0.95)] border border-[#ef4444] rounded-2xl p-8 max-w-md w-full mx-4 animate-danger-pulse shadow-[0_0_50px_rgba(239,68,68,0.3)]">
-            <div className="flex items-center gap-4 mb-4">
-               <div className="w-12 h-12 rounded-full bg-[rgba(239,68,68,0.15)] flex items-center justify-center text-[#ef4444] text-[24px]">⚠</div>
-               <div className="text-[#ef4444] text-[22px] font-bold" style={{ fontFamily: "'Space Grotesk', sans-serif", letterSpacing: '0.04em' }}>
-                 DANGER ZONE BREACH
-               </div>
-            </div>
-            <div className="text-[#dce4e5] text-[13px] mb-8 leading-relaxed opacity-90">
-              A vessel has entered a DANGER zone. Immediate operator action required. Verify vessel identity and initiate emergency protocols.
-            </div>
-            <div className="flex gap-4">
-              <button onClick={() => setShowDangerModal(false)}
-                className="flex-1 py-3.5 bg-[#ef4444] text-white text-[12px] font-bold rounded-xl hover:bg-[#dc2626] tracking-widest cursor-pointer shadow-[0_4px_15px_rgba(239,68,68,0.4)] transition-all">
-                ACKNOWLEDGE
-              </button>
-              <button onClick={() => { addAlert('Emergency recall signal transmitted.', 'danger'); setShowDangerModal(false) }}
-                className="flex-1 py-3.5 bg-[rgba(239,68,68,0.1)] border border-[#ef4444] text-[#ef4444] text-[12px] font-bold rounded-xl hover:bg-[rgba(239,68,68,0.2)] tracking-widest cursor-pointer transition-all">
-                RECALL ALL
-              </button>
+      {/* ── DANGER ZONE MODAL ── */}
+      {showDangerAlert && (
+        <div className="fixed inset-0 z-[4000] flex items-center justify-center bg-[rgba(0,0,0,0.6)] backdrop-blur-sm animate-fade-in pointer-events-auto">
+          <div className="bg-[#0b1016] border border-[#ef4444] rounded-2xl w-[420px] shadow-[0_0_40px_rgba(239,68,68,0.2)] overflow-hidden relative">
+            <div className="absolute inset-0 pointer-events-none rounded-2xl shadow-[inset_0_0_20px_rgba(239,68,68,0.1)]" />
+            <div className="p-6">
+              <div className="flex items-center gap-4 mb-4">
+                <div className="w-10 h-10 rounded-full bg-[rgba(239,68,68,0.1)] border border-[#ef4444] flex items-center justify-center text-[#ef4444]">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                    <line x1="12" y1="9" x2="12" y2="13" />
+                    <line x1="12" y1="17" x2="12.01" y2="17" />
+                  </svg>
+                </div>
+                <h3 className="text-[#ef4444] text-[16px] font-bold tracking-widest font-sans" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>DANGER ZONE BREACH</h3>
+              </div>
+              <p className="text-[#a1a1aa] text-[12px] leading-relaxed mb-8 font-mono">
+                Vessel <strong className="text-white">{dangerAlertBoat}</strong> has entered a DANGER zone. Immediate operator action required. Verify vessel identity and initiate emergency protocols.
+              </p>
+              <div className="flex items-center gap-4">
+                <button onClick={() => setShowDangerAlert(false)} className="flex-1 bg-[#ef4444] text-white py-2.5 rounded-lg text-[11px] font-bold tracking-widest shadow-[0_0_15px_rgba(239,68,68,0.4)] hover:bg-[#dc2626] transition-colors">
+                  ACKNOWLEDGE
+                </button>
+                <button onClick={() => setShowDangerAlert(false)} className="flex-1 bg-transparent border border-[#ef4444] text-[#ef4444] py-2.5 rounded-lg text-[11px] font-bold tracking-widest hover:bg-[rgba(239,68,68,0.1)] transition-colors">
+                  RECALL ALL
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* ── Zone Alert Banner ── */}
-      {(currentZone === 'WARNING' || currentZone === 'DANGER' || currentZone === 'ALERT') && (
-        <div className="absolute top-[80px] left-[460px] right-[460px] py-2.5 text-[11px] font-bold tracking-[0.08em] flex items-center justify-center gap-3 shrink-0 z-20 rounded-full border shadow-[0_4px_20px_rgba(0,0,0,0.5)] backdrop-blur-md pointer-events-none transition-all"
-          style={{ background: zoneBg(currentZone), color: zoneColor(currentZone), borderColor: `${zoneColor(currentZone)}60` }}>
-          <span className="animate-pulse-dot text-[14px]">●</span>
-          {currentZone === 'DANGER' ? 'CRITICAL: Vessel in DANGER zone — initiate emergency protocols immediately' :
-           currentZone === 'WARNING' ? 'WARNING: Vessel approaching restricted boundary — reduce speed and alter course' :
-           'ALERT: Vessel in proximity alert zone — monitor boundary distance'}
         </div>
       )}
 

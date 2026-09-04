@@ -61,13 +61,24 @@ jobs:
       #     Docker bind-mounting a symlink to an external path can confuse
       #     runc and produce "error mounting ..." failures. cp -a keeps the
       #     file inside the workspace so the bind is unambiguous.
+      #     Falls back to the DOTENV GitHub secret if the file is missing.
       - name: Restore .env into workspace (regular file)
         run: |
-          if [ ! -f /home/jana/aegis-secrets/.env ]; then
-            echo "❌  /home/jana/aegis-secrets/.env is missing"
+          ENV_FILE=""
+          if [ -f /home/jana/aegis-secrets/.env ]; then
+            ENV_FILE="/home/jana/aegis-secrets/.env"
+            echo "ℹ️  Found .env on runner at $ENV_FILE"
+          elif [ -n "${{ secrets.DOTENV }}" ]; then
+            ENV_FILE="$GITHUB_WORKSPACE/.env"
+            echo "${{ secrets.DOTENV }}" > "$ENV_FILE"
+            echo "ℹ️  Restored .env from DOTENV secret"
+          else
+            echo "❌  /home/jana/aegis-secrets/.env is missing and DOTENV secret is not set"
             exit 1
           fi
-          cp -a /home/jana/aegis-secrets/.env "$GITHUB_WORKSPACE/.env"
+          if [ "$ENV_FILE" != "$GITHUB_WORKSPACE/.env" ]; then
+            cp -a "$ENV_FILE" "$GITHUB_WORKSPACE/.env"
+          fi
           chmod 644 "$GITHUB_WORKSPACE/.env"
           echo "✅  .env copied into workspace:"
           ls -la "$GITHUB_WORKSPACE/.env"
